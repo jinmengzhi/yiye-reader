@@ -174,7 +174,7 @@ public class FolderPickerPlugin extends Plugin {
     }
 
     private void addFile(JSArray files, DocumentFile file, String relativePath) {
-        if (file == null || !file.isFile() || file.getName() == null || !file.getName().toLowerCase().endsWith(".txt")) return;
+        if (file == null || !file.isFile() || file.getName() == null || !isSupportedImportFile(file.getName())) return;
         JSObject item = new JSObject();
         item.put("name", file.getName());
         item.put("uri", file.getUri().toString());

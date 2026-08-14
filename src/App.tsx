@@ -378,8 +378,12 @@ function isZipFile(file: Pick<File, 'name'>): boolean {
   return file.name.toLocaleLowerCase().endsWith('.zip')
 }
 
-function archiveGroupName(fileName: string, groups: BookGroup[]): string {
-  const base = fileName.replace(/\.zip$/i, '').trim() || '压缩包书籍'
+function archiveDefaultGroupName(fileName: string): string {
+  return fileName.replace(/\.zip$/i, '').trim() || '压缩包书籍'
+}
+
+function archiveGroupName(groupName: string, groups: BookGroup[]): string {
+  const base = groupName.trim() || '压缩包书籍'
   const existing = new Set(groups.map((group) => group.name))
   for (let sequence = 1; sequence < 1000; sequence += 1) {
     const suffix = sequence === 1 ? '' : ` ${sequence}`
@@ -1335,6 +1339,7 @@ export default function App() {
     })
     : []
   const visibleFolderFileGroups = useMemo(() => {
+    if (folderBrowser?.archiveReader) return visibleFolderFiles.length ? [{ label: '', files: visibleFolderFiles }] : []
     const groups: Array<{ label: string; files: FolderFile[] }> = []
     for (const file of visibleFolderFiles) {
       const label = folderDateGroupLabel(file.modifiedAt)
@@ -1343,7 +1348,7 @@ export default function App() {
       else groups.push({ label, files: [file] })
     }
     return groups
-  }, [visibleFolderFiles])
+  }, [folderBrowser?.archiveReader, visibleFolderFiles])
   const allFolderFilesSelected = selectableFolderFileIds.length > 0
     && selectableFolderFileIds.every((id) => selectedFolderFiles.includes(id))
   const activeFontLabel = FONT_OPTIONS.find((option) => option.value === settings.fontFamily)?.label
@@ -2096,7 +2101,7 @@ export default function App() {
           displayPath: 'ZIP 压缩包',
         },
         files: archiveFiles,
-        archiveGroupName: file.name,
+        archiveGroupName: archiveDefaultGroupName(file.name),
         archiveCreateGroup: true,
         archiveReader,
         archiveEntries,
@@ -2176,8 +2181,8 @@ export default function App() {
     }
     const commonFolders = [...settings.commonFolders.filter((folder) => folder.id !== commonFolder.id), commonFolder]
     await updateSettings({ commonFolders })
-    const txtFiles = Array.from(files).filter((file) => file.name.toLowerCase().endsWith('.txt'))
-    const sortedFiles = txtFiles.map((file) => ({
+    const importFiles = Array.from(files).filter((file) => file.name.toLowerCase().endsWith('.txt') || isZipFile(file))
+    const sortedFiles = importFiles.map((file) => ({
       name: file.name,
       size: file.size,
       uri: '',
@@ -2222,7 +2227,7 @@ export default function App() {
   }
 
   function isFolderFileImported(file: FolderFile): boolean {
-    if (folderBrowser?.archiveGroupName) return false
+    if (folderBrowser?.archiveReader) return false
     return books.some((book) => (file.uri && book.sourceUri === file.uri)
       || (book.originalName === file.name && book.size === file.size))
   }
@@ -2280,8 +2285,31 @@ export default function App() {
     if (!folderBrowser || !selectedFolderFiles.length) return
     const browser = folderBrowser
     const selected = browser.files.filter((file) => selectedFolderFiles.includes(folderFileId(file)))
-    const groupName = browser.archiveGroupName && browser.archiveCreateGroup
-      ? archiveGroupName(browser.archiveGroupName, settings.bookGroups)
+    const zipFiles = browser.archiveReader ? [] : selected.filter(isZipFile)
+    if (zipFiles.length) {
+      if (selected.length !== 1) {
+        showToast('请选择一个 ZIP 压缩包，或一次选择多个 TXT 文件。')
+        return
+      }
+      setBusy(true)
+      try {
+        const zipFile = await readNativeFolderFile(zipFiles[0])
+        await closeFolderBrowser(browser)
+        await openZipForSelection(zipFile)
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '无法读取这个 ZIP 压缩包。')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+    const requestedGroupName = browser.archiveGroupName?.trim()
+    if (browser.archiveReader && browser.archiveCreateGroup && !requestedGroupName) {
+      showToast('请输入分组名称。')
+      return
+    }
+    const groupName = browser.archiveReader && browser.archiveCreateGroup && requestedGroupName
+      ? archiveGroupName(requestedGroupName, settings.bookGroups)
       : undefined
     if (browser.archiveReader) {
       const imported = await importArchiveFiles(selected, browser, groupName)
@@ -3401,7 +3429,7 @@ export default function App() {
         ref={folderInputRef}
         className="visually-hidden"
         type="file"
-        accept=".txt,text/plain"
+        accept=".txt,.zip,text/plain,application/zip,application/x-zip-compressed"
         multiple
         onChange={(event) => void handleFolderFiles(event.target.files)}
       />
@@ -3430,7 +3458,7 @@ export default function App() {
                 ) : (
                   <button className="icon-button" aria-label="搜索书籍" onClick={() => setSearchOpen(true)}><Icon name="search" /></button>
                 )}
-                <button className="icon-button library-menu-button" aria-label="书籍操作" disabled={!books.length} onClick={() => setSheet('library-actions')}>
+                <button className="icon-button library-menu-button" aria-label="书架布局" disabled={!books.length} onClick={() => setSheet('library-actions')}>
                   <Icon name="grid-more" />
                 </button>
               </div>
@@ -3581,7 +3609,8 @@ export default function App() {
               <button className="confirm" disabled={!selectedBooks.length} onClick={() => void addSelectedBooksToActiveGroup()}><Icon name="plus" size={21} /><span>{selectedBooks.length ? `添加 ${selectedBooks.length} 本` : `添加到 ${groupBatchAddTarget.name}`}</span></button>
             </nav>
           ) : selectedBooks.length > 0 ? (
-            <nav className="bottom-nav selection-bottom-nav" aria-label="已选书籍操作">
+            <nav className={`bottom-nav selection-bottom-nav ${selectedBooks.length === 1 ? 'selection-bottom-nav-with-rename' : ''}`} aria-label="已选书籍操作">
+              {selectedBooks.length === 1 && <button onClick={startRenameSelectedBook}><Icon name="type" size={21} /><span>重命名</span></button>}
               <button onClick={() => setSheet('move-selection')}><Icon name="folder" size={21} /><span>移动到</span></button>
               <button className="danger" onClick={requestDeleteSelectedBooks}><Icon name="trash" size={21} /><span>删除</span></button>
             </nav>
@@ -3660,40 +3689,54 @@ export default function App() {
               <button className="icon-button" aria-label="返回设置" onClick={() => void closeFolderBrowser(folderBrowser)}><Icon name="back" /></button>
               <div><h2 id="folder-title">选择书籍</h2><small>{folderBrowser.folder.name}</small></div>
             </div>
-            {folderBrowser.archiveGroupName && <label className="toggle-row archive-group-toggle">
-              <span><strong>自动新建分组</strong><small>开启后，本次导入的书籍会按压缩包名归入新分组</small></span>
-              <input
-                type="checkbox"
-                checked={Boolean(folderBrowser.archiveCreateGroup)}
-                onChange={(event) => setFolderBrowser((current) => current ? { ...current, archiveCreateGroup: event.target.checked } : current)}
-              />
-              <i aria-hidden="true" />
-            </label>}
-            {folderBrowser.archivePasswordRequired && <label className="archive-password-row">
-              <span><strong>压缩包密码</strong><small>请输入密码后导入加密 TXT</small></span>
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={folderBrowser.archivePassword || ''}
-                onChange={(event) => setFolderBrowser((current) => current ? { ...current, archivePassword: event.target.value, archivePasswordError: undefined } : current)}
-                placeholder="输入密码"
-                aria-label="压缩包密码"
-              />
-              {folderBrowser.archivePasswordError && <em>{folderBrowser.archivePasswordError}</em>}
-            </label>}
-            <label className="folder-browser-search">
+            {folderBrowser.archiveReader && <section className="archive-import-options" aria-label="压缩包导入选项">
+              <label className="archive-group-control">
+                <span>自动新建分组</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(folderBrowser.archiveCreateGroup)}
+                  onChange={(event) => setFolderBrowser((current) => current ? { ...current, archiveCreateGroup: event.target.checked } : current)}
+                />
+                <i aria-hidden="true" />
+              </label>
+              {folderBrowser.archiveCreateGroup && <label className="archive-option-field">
+                <span>分组名称</span>
+                <input
+                  value={folderBrowser.archiveGroupName || ''}
+                  onChange={(event) => setFolderBrowser((current) => current ? { ...current, archiveGroupName: event.target.value } : current)}
+                  placeholder="输入分组名称"
+                  maxLength={18}
+                  aria-label="分组名称"
+                />
+              </label>}
+              {folderBrowser.archivePasswordRequired && <label className="archive-option-field archive-password-field">
+                <span>压缩包密码</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={folderBrowser.archivePassword || ''}
+                  onChange={(event) => setFolderBrowser((current) => current ? { ...current, archivePassword: event.target.value, archivePasswordError: undefined } : current)}
+                  placeholder="输入密码"
+                  aria-label="压缩包密码"
+                />
+                {folderBrowser.archivePasswordError && <em>{folderBrowser.archivePasswordError}</em>}
+              </label>}
+            </section>}
+            {(folderBrowser.files.length > 6 || folderSearchQuery) && <label className="folder-browser-search">
               <Icon name="search" size={17} />
-              <input value={folderSearchQuery} onChange={(event) => setFolderSearchQuery(event.target.value)} placeholder="搜索此文件夹中的 TXT" aria-label="搜索书名或文件夹" />
+              <input value={folderSearchQuery} onChange={(event) => setFolderSearchQuery(event.target.value)} placeholder="搜索书名或文件夹" aria-label="搜索书名或文件夹" />
               {folderSearchQuery && <button type="button" aria-label="清除搜索" onClick={() => setFolderSearchQuery('')}><Icon name="close" size={14} /></button>}
-            </label>
+            </label>}
             <div className="folder-browser-toolbar">
-              <span>按修改时间 · {folderSearchQuery.trim() ? `${visibleFolderFiles.length} / ${folderBrowser.files.length}` : folderBrowser.files.length} 个文件</span>
+              <span>{folderBrowser.archiveReader
+                ? `${folderSearchQuery.trim() ? `${visibleFolderFiles.length} / ${folderBrowser.files.length}` : folderBrowser.files.length} 本书`
+                : `按修改时间 · ${folderSearchQuery.trim() ? `${visibleFolderFiles.length} / ${folderBrowser.files.length}` : folderBrowser.files.length} 个文件`}</span>
               <button disabled={!selectableFolderFileIds.length} onClick={toggleAllFolderFiles}>{allFolderFilesSelected ? '取消全选' : '全选'}</button>
             </div>
-            <div className="folder-file-list">
+            <div className={`folder-file-list ${folderBrowser.archiveReader ? 'archive-file-list' : ''}`}>
               {visibleFolderFiles.length ? visibleFolderFileGroups.map((group) => (
                 <section className="folder-date-group" key={group.label}>
-                  <div className="folder-date-heading"><strong>{group.label}</strong><span>|</span><small>{group.files.length} 项</small></div>
+                  {group.label && <div className="folder-date-heading"><strong>{group.label}</strong><span>|</span><small>{group.files.length} 项</small></div>}
                   {group.files.map((file) => {
                     const imported = isFolderFileImported(file)
                       const selected = selectedFolderFiles.includes(folderFileId(file))
@@ -3715,7 +3758,9 @@ export default function App() {
                 return file && folderBrowser.archiveEntries?.get(folderFileId(file))?.encrypted && !folderBrowser.archivePassword
               }))}
               onClick={() => void confirmFolderFiles()}
-            >导入已选 {selectedFolderFiles.length} 个文件</button>
+            >{selectedFolderFiles.length
+              ? `导入 ${selectedFolderFiles.length} ${folderBrowser.archiveReader ? '本书' : '个文件'}`
+              : '选择书籍后导入'}</button>
           </section>
         </div>
       )}
@@ -3787,10 +3832,7 @@ export default function App() {
 
       {sheet === 'library-actions' && (
         <div className="library-popover-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setSheet(null) }}>
-          <section className="library-popover compact-library-popover" role="dialog" aria-modal="true" aria-label="书籍操作">
-            <button className="library-popover-action" disabled={selectedBooks.length !== 1} onClick={startRenameSelectedBook}>
-              <Icon name="type" size={17} /><span>重命名</span>
-            </button>
+          <section className="library-popover compact-library-popover" role="dialog" aria-modal="true" aria-label="书架布局">
             <p className="library-columns-label">每行书籍</p>
             {([3, 4, 5] as const).map((columns) => (
               <button className={`library-columns-option ${settings.shelfColumns === columns ? 'active' : ''}`} key={columns} aria-pressed={settings.shelfColumns === columns} onClick={() => { void updateSettings({ shelfColumns: columns }); setSheet(null) }}>
@@ -3826,11 +3868,10 @@ export default function App() {
               <>
                 <div className="sheet-title"><h2>重命名书籍</h2></div>
                 <div className="group-name-form">
-                  <label htmlFor="book-name">书架书名</label>
-                  <input id="book-name" autoFocus maxLength={80} value={bookName} onChange={(event) => { setBookName(event.target.value); setBookNameError('') }} onKeyDown={(event) => { if (event.key === 'Enter') void renameBook() }} placeholder="输入书名" />
+                  <input id="book-name" aria-label="书架书名" autoFocus maxLength={80} value={bookName} onChange={(event) => { setBookName(event.target.value); setBookNameError('') }} onKeyDown={(event) => { if (event.key === 'Enter') void renameBook() }} placeholder="输入书名" />
                   {bookNameError && <small>{bookNameError}</small>}
                   {bookActionCandidate.sourceUri && isNativeAndroid() && <p className="rename-source-note">将同时尝试修改手机中的原 TXT 文件名。</p>}
-                  <button className="primary-button" onClick={() => void renameBook()}>保存书名</button>
+                  <button className="editor-submit" onClick={() => void renameBook()}>保存书名</button>
                 </div>
               </>
             ) : (
@@ -3853,17 +3894,15 @@ export default function App() {
               <>
                 <div className="sheet-title"><h2>{sheet === 'create-group' ? '新建分组' : '重命名分组'}</h2></div>
                 <div className="group-name-form">
-                  <label htmlFor="group-name">分组名称</label>
-                  <input id="group-name" autoFocus maxLength={18} value={groupName} onChange={(event) => { setGroupName(event.target.value); setGroupNameError('') }} onKeyDown={(event) => { if (event.key === 'Enter') void (sheet === 'create-group' ? createGroup() : renameActiveGroup()) }} placeholder="例如：已读、小说、待看" />
+                  <input id="group-name" aria-label="分组名称" autoFocus maxLength={18} value={groupName} onChange={(event) => { setGroupName(event.target.value); setGroupNameError('') }} onKeyDown={(event) => { if (event.key === 'Enter') void (sheet === 'create-group' ? createGroup() : renameActiveGroup()) }} placeholder="例如：已读、小说、待看" />
                   {groupNameError && <small>{groupNameError}</small>}
-                  <button className="primary-button" onClick={() => void (sheet === 'create-group' ? createGroup() : renameActiveGroup())}>{sheet === 'create-group' ? '创建分组' : '保存名称'}</button>
+                  <button className="editor-submit" onClick={() => void (sheet === 'create-group' ? createGroup() : renameActiveGroup())}>{sheet === 'create-group' ? '创建分组' : '保存名称'}</button>
                 </div>
               </>
             ) : activeGroup ? (
               <>
                 <div className="sheet-title group-sheet-title">
                   <div className="group-title-block">
-                    <p className="eyebrow">分组书架</p>
                     <h2><button className="group-name-button" onClick={() => { setGroupName(activeGroup.name); setGroupNameError(''); setSheet('rename-group') }}>{activeGroup.name}</button></h2>
                   </div>
                 </div>
@@ -3881,17 +3920,17 @@ export default function App() {
                   </section>
                 ) : <div className="group-empty"><Icon name="folder" size={29} /><p>长按书架中的书，拖到这个分组。</p></div>}
                 {groupBatchAddTarget ? (
-                  <div className="group-inline-selection-actions" aria-label={`添加书籍到${groupBatchAddTarget.name}`}>
+                  <nav className="bottom-nav selection-bottom-nav group-bottom-nav" aria-label={`添加书籍到${groupBatchAddTarget.name}`}>
                     <button onClick={() => { setSheet(null); setActiveGroupId(null) }}><Icon name="back" size={18} /><span>返回书架</span></button>
                     <button className="confirm" disabled={!selectedBooks.length} onClick={() => void addSelectedBooksToActiveGroup()}><Icon name="plus" size={18} /><span>{selectedBooks.length ? `添加 ${selectedBooks.length} 本` : '请选择'}</span></button>
-                  </div>
+                  </nav>
                 ) : selectedGroupBooks.length > 0 ? (
-                  <div className="group-inline-selection-actions" aria-label="分组内已选书籍操作">
+                  <nav className={`bottom-nav selection-bottom-nav group-bottom-nav ${selectedGroupBooks.length === 1 ? 'group-bottom-nav-with-rename' : ''}`} aria-label="分组内已选书籍操作">
                     {selectedGroupBooks.length === 1 && <button onClick={startRenameSelectedBook}><Icon name="type" size={18} /><span>重命名</span></button>}
                     <button onClick={() => void removeSelectedBooksFromActiveGroup()}><Icon name="book" size={18} /><span>移出分组</span></button>
                     <button className="danger" onClick={requestDeleteSelectedBooks}><Icon name="trash" size={18} /><span>删除</span></button>
-                  </div>
-                ) : <div className="group-default-actions"><button className="group-add-button" onClick={openGroupBatchAdd}><Icon name="plus" size={17} />批量添加</button><button className="dissolve-group-button" onClick={() => void dissolveActiveGroup()}>解散分组</button></div>}
+                  </nav>
+                ) : <nav className="bottom-nav group-bottom-nav" aria-label="分组操作"><button onClick={openGroupBatchAdd}><Icon name="plus" size={18} /><span>批量添加</span></button><button className="danger" onClick={() => void dissolveActiveGroup()}><Icon name="folder" size={18} /><span>解散分组</span></button></nav>}
               </>
             ) : null}
           </section>
@@ -3969,11 +4008,10 @@ export default function App() {
               </>
             ) : sheet === 'progress' ? (
               <>
-                <div className="sheet-title"><h2>跳转进度</h2><button className="icon-button" aria-label="关闭跳转进度" onClick={closeProgressJump}><Icon name="close" /></button></div>
+                <div className="sheet-title"><h2>跳转进度</h2></div>
                 <form className="group-name-form progress-jump-form" onSubmit={(event) => { event.preventDefault(); jumpToProgress() }}>
-                  <label>{settings.progressDisplay === 'percent' ? '输入 0 至 100 的百分比' : `输入 1 至 ${readerPages} 的页码`}</label>
-                  <input ref={progressInputRef} autoFocus type="text" inputMode={settings.progressDisplay === 'percent' ? 'decimal' : 'numeric'} enterKeyHint="go" pattern={settings.progressDisplay === 'page' ? '[0-9]*' : '[0-9]*[.]?[0-9]*'} value={progressInput} onFocus={(event) => event.currentTarget.select()} onChange={(event) => updateProgressInput(event.target.value)} aria-label={settings.progressDisplay === 'percent' ? '跳转百分比' : '跳转页码'} />
-                  <button type="submit" className="primary-button">跳转</button>
+                  <input ref={progressInputRef} autoFocus type="text" inputMode={settings.progressDisplay === 'percent' ? 'decimal' : 'numeric'} enterKeyHint="go" pattern={settings.progressDisplay === 'page' ? '[0-9]*' : '[0-9]*[.]?[0-9]*'} value={progressInput} onFocus={(event) => event.currentTarget.select()} onChange={(event) => updateProgressInput(event.target.value)} aria-label={settings.progressDisplay === 'percent' ? '跳转百分比' : '跳转页码'} placeholder={settings.progressDisplay === 'percent' ? '0 - 100' : `1 - ${readerPages}`} />
+                  <button type="submit" className="editor-submit">跳转</button>
                 </form>
               </>
             ) : sheet === 'fonts' ? (

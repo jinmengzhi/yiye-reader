@@ -102,11 +102,11 @@ export interface ImportCandidate {
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
   theme: 'paper',
-  fontSize: 18,
-  lineHeight: 1.9,
-  paragraphSpacing: 0.7,
-  paragraphIndent: 2,
-  pageMargin: 24,
+  fontSize: 14,
+  lineHeight: 1.5,
+  paragraphSpacing: 0.3,
+  paragraphIndent: 0,
+  pageMargin: 16,
   backgroundColor: '#f5f0e7',
   textColor: '#2e2b26',
   commonColors: [],
