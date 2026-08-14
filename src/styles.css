@@ -31,6 +31,10 @@
   --system-bottom-inset: max(20px, env(safe-area-inset-bottom, 0px));
 }
 
+.native-android .shelf-view { padding-bottom: calc(68px + max(12px, env(safe-area-inset-bottom, 0px))); }
+.native-android .topbar { min-height: calc(48px + var(--status-content-inset)); margin-bottom: 7px; }
+.native-android .bottom-nav:not(.group-bottom-nav) { height: calc(48px + max(12px, env(safe-area-inset-bottom, 0px))); padding: 3px 18px max(12px, env(safe-area-inset-bottom, 0px)); }
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; min-height: 0; margin: 0; overflow: hidden; overscroll-behavior: none; }
 body { min-width: 320px; min-height: 100vh; min-height: 100dvh; }
@@ -256,6 +260,10 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .folder-scan-page .spinner { width: 24px; height: 24px; margin-bottom: 5px; }
 .folder-scan-page strong { font-size: 16px; font-weight: 600; }
 .folder-scan-page small { color: var(--muted); font-family: "Microsoft YaHei", sans-serif; font-size: 11px; }
+.activity-overlay { position: fixed; z-index: 25; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; padding: var(--status-content-inset) 24px var(--system-bottom-inset); background: color-mix(in srgb, var(--paper) 92%, transparent); color: var(--ink); text-align: center; backdrop-filter: blur(3px); }
+.activity-overlay .spinner { width: 26px; height: 26px; margin-bottom: 4px; }
+.activity-overlay strong { font-size: 16px; font-weight: 600; }
+.activity-overlay small { color: var(--muted); font-family: "Microsoft YaHei", sans-serif; font-size: 11px; }
 .folder-open:disabled { cursor: default; }
 .folder-open.scanning { opacity: 1; }
 .folder-browser-shell { display: flex; width: min(100%, 720px); height: 100%; min-height: 0; flex-direction: column; padding: 0 16px 14px; }
@@ -267,12 +275,17 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .folder-browser-shell .dialog-title-row small { display: block; overflow: hidden; margin-top: 1px; color: var(--muted); font-family: "Microsoft YaHei", sans-serif; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .folder-browser-shell .folder-selection-note { flex: none; }
 .archive-import-options { display: grid; gap: 3px; flex: none; padding: 6px 0; border-bottom: 1px solid rgba(67,56,43,.1); }
-.archive-group-control { display: flex; min-height: 34px; align-items: center; justify-content: space-between; color: var(--ink); font-family: "Microsoft YaHei", sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; }
-.archive-group-control input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.archive-group-control i { position: relative; flex: 0 0 38px; height: 22px; border-radius: 20px; background: rgba(102,95,84,.24); transition: background .18s; }
-.archive-group-control i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: transform .18s; }
-.archive-group-control input:checked + i { background: var(--accent); }
-.archive-group-control input:checked + i::after { transform: translateX(16px); }
+.archive-group-row { display: flex; min-height: 34px; align-items: center; gap: 10px; font-family: "Microsoft YaHei", sans-serif; }
+.archive-group-label { flex: none; color: var(--ink); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.archive-group-switch { position: relative; display: block; width: 38px; height: 22px; flex: 0 0 38px; cursor: pointer; }
+.archive-group-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.archive-group-switch i { position: absolute; inset: 0; border-radius: 20px; background: rgba(102,95,84,.24); transition: background .18s; }
+.archive-group-switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: transform .18s; }
+.archive-group-switch input:checked + i { background: var(--accent); }
+.archive-group-switch input:checked + i::after { transform: translateX(16px); }
+.archive-group-name-input { width: 100%; min-width: 0; height: 30px; flex: 1; padding: 0 8px; border: 1px solid rgba(67,56,43,.16); border-radius: 6px; outline: 0; background: rgba(255,255,255,.58); color: var(--ink); font-family: "Microsoft YaHei", sans-serif; font-size: 13px; text-align: left; }
+.archive-group-name-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(154,95,61,.12); }
+.archive-group-name-input::placeholder { color: var(--muted); }
 .archive-option-field { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; min-height: 34px; align-items: center; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; }
 .archive-option-field > span { color: var(--muted); }
 .archive-option-field input { width: 100%; min-width: 0; height: 32px; padding: 0 4px; border: 0; border-bottom: 1px solid rgba(67,56,43,.16); border-radius: 0; outline: 0; background: transparent; color: var(--ink); font-family: "Microsoft YaHei", sans-serif; font-size: 13px; }

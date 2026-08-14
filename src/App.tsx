@@ -401,6 +401,30 @@ function archiveEntryPath(filename: string): string | null {
   return relativePath
 }
 
+async function zipContainsImportableTxt(file: File): Promise<boolean> {
+  if (!file.size || file.size > MAX_ZIP_FILE_SIZE) return false
+  const reader = new ZipReader(new BlobReader(file))
+  try {
+    const entries = await reader.getEntries()
+    return entries.some((entry) => {
+      if (entry.directory || entry.uncompressedSize <= 0) return false
+      const relativePath = archiveEntryPath(entry.filename)
+      const fileName = relativePath?.split('/').pop() || ''
+      const hiddenOrMetadata = relativePath?.startsWith('__MACOSX/')
+        || relativePath?.split('/').some((part) => part.startsWith('.'))
+      return Boolean(relativePath && fileName.toLocaleLowerCase().endsWith('.txt') && !hiddenOrMetadata)
+    })
+  } catch {
+    return false
+  } finally {
+    try {
+      await reader.close()
+    } catch {
+      // A failed directory read still needs no further cleanup from the caller.
+    }
+  }
+}
+
 function archiveReadErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error || '')
   if (message === ERR_INVALID_PASSWORD) return '压缩包密码错误，请重试。'
@@ -933,6 +957,7 @@ export default function App() {
   const [readerTextSelection, setReaderTextSelection] = useState<ReaderTextSelection | null>(null)
   const [progressInput, setProgressInput] = useState('')
   const [busy, setBusy] = useState(true)
+  const [activityMessage, setActivityMessage] = useState<string | null>(null)
   const [libraryReady, setLibraryReady] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const txtInputRef = useRef<HTMLInputElement>(null)
@@ -944,6 +969,7 @@ export default function App() {
   const readerSelectionInitializedRef = useRef(false)
   const readerRef = useRef<HTMLDivElement>(null)
   const scanningFolderRef = useRef<string | null>(null)
+  const zipTextScanCacheRef = useRef(new Map<string, boolean>())
   const pendingExternalFileUriRef = useRef<string | null>(null)
   const importingExternalFileUrisRef = useRef(new Set<string>())
   const tocListRef = useRef<HTMLDivElement>(null)
@@ -1683,7 +1709,9 @@ export default function App() {
 
   async function handleCustomFontFile(file: File | undefined) {
     if (!file) return
+    setActivityMessage('正在导入字体')
     try {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
       const prepared = await prepareFontImport(file)
       const name = prepared.displayName
       if (customFonts.some((font) => font.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('已导入同名字体。')
@@ -1702,6 +1730,7 @@ export default function App() {
     } catch (error) {
       showToast(error instanceof Error ? error.message : '字体导入失败。')
     } finally {
+      setActivityMessage(null)
       if (customFontInputRef.current) customFontInputRef.current.value = ''
     }
   }
@@ -1758,11 +1787,16 @@ export default function App() {
     if (!changed.length) return
     const nextBooks = books.map((book) => selected.has(book.id) ? { ...book, groupId: groupBatchAddTargetId } : book)
     setBooks(nextBooks)
-    await Promise.all(changed.map((book) => saveBook({ ...book, groupId: groupBatchAddTargetId })))
-    setSelectedBookIds([])
-    setGroupBatchAddTargetId(null)
-    setSheet(null)
-    showToast(`已添加 ${changed.length} 本书到分组。`)
+    setActivityMessage(`正在添加 ${changed.length} 本书到分组`)
+    try {
+      await Promise.all(changed.map((book) => saveBook({ ...book, groupId: groupBatchAddTargetId })))
+      setSelectedBookIds([])
+      setGroupBatchAddTargetId(null)
+      setSheet(null)
+      showToast(`已添加 ${changed.length} 本书到分组。`)
+    } finally {
+      setActivityMessage(null)
+    }
   }
 
   function cancelGroupBatchAdd() {
@@ -1779,10 +1813,15 @@ export default function App() {
     if (!changed.length) return
     const nextBooks = books.map((book) => selected.has(book.id) ? { ...book, groupId } : book)
     setBooks(nextBooks)
-    await Promise.all(changed.map((book) => saveBook({ ...book, groupId })))
-    setSelectedBookIds([])
-    setSheet(null)
-    showToast(groupId ? `已将 ${changed.length} 本书移入分组。` : `已将 ${changed.length} 本书移回书架。`)
+    setActivityMessage(`正在移动 ${changed.length} 本书`)
+    try {
+      await Promise.all(changed.map((book) => saveBook({ ...book, groupId })))
+      setSelectedBookIds([])
+      setSheet(null)
+      showToast(groupId ? `已将 ${changed.length} 本书移入分组。` : `已将 ${changed.length} 本书移回书架。`)
+    } finally {
+      setActivityMessage(null)
+    }
   }
 
   async function removeSelectedBooksFromActiveGroup() {
@@ -1790,9 +1829,14 @@ export default function App() {
     const selected = new Set(selectedGroupBooks.map((book) => book.id))
     const nextBooks = books.map((book) => selected.has(book.id) ? { ...book, groupId: undefined } : book)
     setBooks(nextBooks)
-    await Promise.all(selectedGroupBooks.map((book) => saveBook({ ...book, groupId: undefined })))
-    setSelectedBookIds([])
-    showToast(`已将 ${selectedGroupBooks.length} 本书移出分组。`)
+    setActivityMessage(`正在移出 ${selectedGroupBooks.length} 本书`)
+    try {
+      await Promise.all(selectedGroupBooks.map((book) => saveBook({ ...book, groupId: undefined })))
+      setSelectedBookIds([])
+      showToast(`已将 ${selectedGroupBooks.length} 本书移出分组。`)
+    } finally {
+      setActivityMessage(null)
+    }
   }
 
   function requestDeleteSelectedBooks() {
@@ -1805,13 +1849,18 @@ export default function App() {
   async function confirmBatchDeleteBooks() {
     if (!batchDeleteCandidates.length) return
     const ids = new Set(batchDeleteCandidates.map((book) => book.id))
-    await Promise.all(batchDeleteCandidates.map((book) => deleteBook(book.id)))
-    for (const id of ids) readerChapterRecognitionCache.delete(id)
-    setBooks((current) => current.filter((book) => !ids.has(book.id)))
-    setSelectedBookIds((current) => current.filter((id) => !ids.has(id)))
     const count = batchDeleteCandidates.length
-    setBatchDeleteCandidates([])
-    showToast(`已从书架删除 ${count} 本书。`)
+    setActivityMessage(`正在删除 ${count} 本书`)
+    try {
+      await Promise.all(batchDeleteCandidates.map((book) => deleteBook(book.id)))
+      for (const id of ids) readerChapterRecognitionCache.delete(id)
+      setBooks((current) => current.filter((book) => !ids.has(book.id)))
+      setSelectedBookIds((current) => current.filter((id) => !ids.has(id)))
+      setBatchDeleteCandidates([])
+      showToast(`已从书架删除 ${count} 本书。`)
+    } finally {
+      setActivityMessage(null)
+    }
   }
 
   async function updateSettings(patch: Partial<ReaderSettings>) {
@@ -2023,11 +2072,16 @@ export default function App() {
     const groupBooks = books.filter((book) => book.groupId === activeGroupId)
     const nextBooks = books.map((book) => book.groupId === activeGroupId ? { ...book, groupId: undefined } : book)
     setBooks(nextBooks)
-    await Promise.all(groupBooks.map((book) => saveBook({ ...book, groupId: undefined })))
-    await updateSettings({ bookGroups: settings.bookGroups.filter((group) => group.id !== activeGroupId) })
-    setActiveGroupId(null)
-    setSheet(null)
-    showToast('分组已解散，书籍保留在书架。')
+    setActivityMessage('正在解散分组')
+    try {
+      await Promise.all(groupBooks.map((book) => saveBook({ ...book, groupId: undefined })))
+      await updateSettings({ bookGroups: settings.bookGroups.filter((group) => group.id !== activeGroupId) })
+      setActiveGroupId(null)
+      setSheet(null)
+      showToast('分组已解散，书籍保留在书架。')
+    } finally {
+      setActivityMessage(null)
+    }
   }
 
   async function importExternalFile(uri: string) {
@@ -2042,11 +2096,15 @@ export default function App() {
       await closeFolderBrowser()
       setActiveBookId(null)
       setReaderChromeVisible(true)
-      if (isZipFile(file)) await openZipForSelection(await readNativeFolderFile(file))
+      if (isZipFile(file)) {
+        setActivityMessage('正在读取 ZIP 压缩包')
+        await openZipForSelection(await readNativeFolderFile(file))
+      }
       else await importFolderFiles([file])
     } catch (error) {
       showToast(error instanceof Error ? error.message : '无法打开这个文件。')
     } finally {
+      setActivityMessage(null)
       importingExternalFileUrisRef.current.delete(uri)
     }
   }
@@ -2056,6 +2114,7 @@ export default function App() {
       showToast('ZIP 压缩包不能超过 100 MB。')
       return
     }
+    setActivityMessage('正在读取 ZIP 压缩包')
     setBusy(true)
     let archiveReader: ZipReader<Blob> | null = null
     try {
@@ -2122,6 +2181,7 @@ export default function App() {
       showToast(archiveReadErrorMessage(error, error instanceof Error ? error.message : '无法读取这个 ZIP 压缩包。'))
     } finally {
       setBusy(false)
+      setActivityMessage(null)
     }
   }
 
@@ -2158,7 +2218,12 @@ export default function App() {
           showToast('请选择一个 ZIP 压缩包，或一次选择多个 TXT 文件。')
           return
         }
-        await openZipForSelection(await readNativeFolderFile(zipFiles[0]))
+        setActivityMessage('正在读取 ZIP 压缩包')
+        try {
+          await openZipForSelection(await readNativeFolderFile(zipFiles[0]))
+        } finally {
+          setActivityMessage(null)
+        }
         return
       }
       await importFolderFiles(result.files)
@@ -2179,25 +2244,30 @@ export default function App() {
       uri: '',
       displayPath: firstFile.webkitRelativePath ? `浏览器 / ${folderName}` : '浏览器中已选择的文件夹',
     }
-    const commonFolders = [...settings.commonFolders.filter((folder) => folder.id !== commonFolder.id), commonFolder]
-    await updateSettings({ commonFolders })
-    const importFiles = Array.from(files).filter((file) => file.name.toLowerCase().endsWith('.txt') || isZipFile(file))
-    const sortedFiles = importFiles.map((file) => ({
-      name: file.name,
-      size: file.size,
-      uri: '',
-      modifiedAt: file.lastModified,
-      relativePath: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-      webFile: file,
-    })).sort((left, right) => (right.modifiedAt || 0) - (left.modifiedAt || 0)
-      || (left.relativePath || left.name).localeCompare(right.relativePath || right.name, 'zh-CN'))
-    setFolderBrowser({
-      folder: commonFolder,
-      files: sortedFiles,
-    })
-    setSelectedFolderFiles([])
-    setFolderSearchQuery('')
-    if (folderInputRef.current) folderInputRef.current.value = ''
+    setActivityMessage('正在扫描文件夹')
+    try {
+      const commonFolders = [...settings.commonFolders.filter((folder) => folder.id !== commonFolder.id), commonFolder]
+      await updateSettings({ commonFolders })
+      const candidates = Array.from(files).map((file) => ({
+        name: file.name,
+        size: file.size,
+        uri: '',
+        modifiedAt: file.lastModified,
+        relativePath: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+        webFile: file,
+      }))
+      const sortedFiles = (await filterCommonFolderFiles(candidates)).sort((left, right) => (right.modifiedAt || 0) - (left.modifiedAt || 0)
+        || (left.relativePath || left.name).localeCompare(right.relativePath || right.name, 'zh-CN'))
+      setFolderBrowser({
+        folder: commonFolder,
+        files: sortedFiles,
+      })
+      setSelectedFolderFiles([])
+      setFolderSearchQuery('')
+    } finally {
+      setActivityMessage(null)
+      if (folderInputRef.current) folderInputRef.current.value = ''
+    }
   }
 
   async function openCommonFolder(folder: CommonFolder) {
@@ -2210,7 +2280,7 @@ export default function App() {
     setScanningFolderId(folder.id)
     try {
       const result = await listNativeFolder(folder)
-      const files = [...result.files].sort((left, right) =>
+      const files = (await filterCommonFolderFiles(result.files)).sort((left, right) =>
         (right.modifiedAt || 0) - (left.modifiedAt || 0)
         || (left.relativePath || left.name).localeCompare(right.relativePath || right.name, 'zh-CN'))
       setFolderBrowser({ folder, files })
@@ -2224,6 +2294,30 @@ export default function App() {
         setScanningFolderId(null)
       }
     }
+  }
+
+  async function filterCommonFolderFiles(files: FolderFile[]): Promise<FolderFile[]> {
+    const visibleFiles: FolderFile[] = []
+    for (const file of files) {
+      const lowerName = file.name.toLocaleLowerCase()
+      if (lowerName.endsWith('.txt')) {
+        visibleFiles.push(file)
+        continue
+      }
+      if (!isZipFile(file)) continue
+      const cacheKey = `${folderFileId(file)}:${file.size}:${file.modifiedAt || 0}`
+      let containsTxt = zipTextScanCacheRef.current.get(cacheKey)
+      if (containsTxt === undefined) {
+        try {
+          containsTxt = await zipContainsImportableTxt(await readNativeFolderFile(file))
+        } catch {
+          containsTxt = false
+        }
+        zipTextScanCacheRef.current.set(cacheKey, containsTxt)
+      }
+      if (containsTxt) visibleFiles.push(file)
+    }
+    return visibleFiles
   }
 
   function isFolderFileImported(file: FolderFile): boolean {
@@ -2261,6 +2355,7 @@ export default function App() {
       showToast('请输入压缩包密码。')
       return false
     }
+    setActivityMessage('正在导入书籍')
     setBusy(true)
     try {
       const items = await Promise.all(files.map(async (file) => {
@@ -2278,6 +2373,7 @@ export default function App() {
       return false
     } finally {
       setBusy(false)
+      setActivityMessage(null)
     }
   }
 
@@ -2292,6 +2388,7 @@ export default function App() {
         return
       }
       setBusy(true)
+      setActivityMessage('正在读取 ZIP 压缩包')
       try {
         const zipFile = await readNativeFolderFile(zipFiles[0])
         await closeFolderBrowser(browser)
@@ -2300,6 +2397,7 @@ export default function App() {
         showToast(error instanceof Error ? error.message : '无法读取这个 ZIP 压缩包。')
       } finally {
         setBusy(false)
+        setActivityMessage(null)
       }
       return
     }
@@ -2341,6 +2439,7 @@ export default function App() {
   }
 
   async function importFolderFiles(files: FolderFile[], groupName?: string) {
+    setActivityMessage('正在导入书籍')
     setBusy(true)
     try {
       const items = await Promise.all(files.map(async (file) => ({
@@ -2352,10 +2451,12 @@ export default function App() {
       showToast(error instanceof Error ? error.message : '文件读取失败。')
     } finally {
       setBusy(false)
+      setActivityMessage(null)
     }
   }
 
   async function importBooks(files: Array<{ file: File; sourceUri?: string }>) {
+    setActivityMessage('正在导入书籍')
     setBusy(true)
     try {
       await importPreparedBooks(files)
@@ -2363,6 +2464,7 @@ export default function App() {
       showToast(error instanceof Error ? error.message : '文件读取失败。')
     } finally {
       setBusy(false)
+      setActivityMessage(null)
     }
   }
 
@@ -3337,6 +3439,7 @@ export default function App() {
         showToast('这本书没有可删除的源 TXT 文件。')
         return
       }
+      setActivityMessage('正在删除源文件')
       setBusy(true)
       try {
         await deleteNativeFile(deleteCandidate.sourceUri)
@@ -3345,6 +3448,7 @@ export default function App() {
         return
       } finally {
         setBusy(false)
+        setActivityMessage(null)
       }
     }
     await deleteBook(deleteCandidate.id)
@@ -3361,49 +3465,68 @@ export default function App() {
       showToast('暂无书籍或自定义字体可备份。')
       return
     }
-    const data = createBackup(books, settings, customFonts)
-    if (isNativeAndroid()) await shareNativeBackup(data, backupFileName())
-    else downloadBackup(data)
-    showToast(`已备份 ${books.length} 本书和 ${customFonts.length} 个自定义字体。`)
+    setActivityMessage('正在生成备份')
+    try {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+      const data = createBackup(books, settings, customFonts)
+      if (isNativeAndroid()) await shareNativeBackup(data, backupFileName())
+      else downloadBackup(data)
+      showToast(`已备份 ${books.length} 本书和 ${customFonts.length} 个自定义字体。`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '备份生成失败。')
+    } finally {
+      setActivityMessage(null)
+    }
   }
 
   async function handleBackupFile(files: FileList | null) {
     const file = files?.[0]
     if (!file) return
+    setActivityMessage('正在读取备份')
     try {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
       setRestorePayload(readBackup(await file.arrayBuffer()))
       setSheet(null)
     } catch (error) {
       showToast(error instanceof Error ? error.message : '备份读取失败。')
     } finally {
+      setActivityMessage(null)
       if (backupInputRef.current) backupInputRef.current.value = ''
     }
   }
 
   async function restoreBackup(mode: 'merge' | 'replace') {
     if (!restorePayload) return
-    let nextBooks = restorePayload.books
-    let nextFonts = restorePayload.customFonts
-    let nextSettings = normalizeSettings(restorePayload.settings)
-    if (mode === 'merge') {
-      const fingerprints = new Set(restorePayload.books.map((book) => book.fingerprint))
-      nextBooks = [...restorePayload.books, ...books.filter((book) => !fingerprints.has(book.fingerprint))]
-      nextSettings = {
-        ...normalizeSettings(restorePayload.settings),
-        bookGroups: [...normalizeSettings(restorePayload.settings).bookGroups, ...settings.bookGroups.filter((group) => !normalizeSettings(restorePayload.settings).bookGroups.some((restored) => restored.id === group.id))],
+    setActivityMessage('正在恢复备份')
+    try {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+      let nextBooks = restorePayload.books
+      let nextFonts = restorePayload.customFonts
+      let nextSettings = normalizeSettings(restorePayload.settings)
+      if (mode === 'merge') {
+        const fingerprints = new Set(restorePayload.books.map((book) => book.fingerprint))
+        nextBooks = [...restorePayload.books, ...books.filter((book) => !fingerprints.has(book.fingerprint))]
+        nextSettings = {
+          ...normalizeSettings(restorePayload.settings),
+          bookGroups: [...normalizeSettings(restorePayload.settings).bookGroups, ...settings.bookGroups.filter((group) => !normalizeSettings(restorePayload.settings).bookGroups.some((restored) => restored.id === group.id))],
+        }
+        const restoredFontIds = new Set(restorePayload.customFonts.map((font) => font.id))
+        nextFonts = [...restorePayload.customFonts, ...customFonts.filter((font) => !restoredFontIds.has(font.id))]
       }
-      const restoredFontIds = new Set(restorePayload.customFonts.map((font) => font.id))
-      nextFonts = [...restorePayload.customFonts, ...customFonts.filter((font) => !restoredFontIds.has(font.id))]
+      const loadedFonts = await activateCustomFonts(nextFonts)
+      const selectedFontId = customFontId(nextSettings.fontFamily)
+      if (selectedFontId && !loadedFonts.some((font) => font.id === selectedFontId)) nextSettings = { ...nextSettings, fontFamily: 'serif' }
+      await replaceLibrary(nextBooks, nextSettings, loadedFonts)
+      readerChapterRecognitionCache.clear()
+      setBooks(nextBooks.sort((a, b) => b.lastReadAt - a.lastReadAt))
+      setSettings(nextSettings)
+      setRestorePayload(null)
+      showToast(`恢复完成，共 ${nextBooks.length} 本书和 ${loadedFonts.length} 个自定义字体。`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '备份恢复失败。')
+    } finally {
+      setActivityMessage(null)
     }
-    const loadedFonts = await activateCustomFonts(nextFonts)
-    const selectedFontId = customFontId(nextSettings.fontFamily)
-    if (selectedFontId && !loadedFonts.some((font) => font.id === selectedFontId)) nextSettings = { ...nextSettings, fontFamily: 'serif' }
-    await replaceLibrary(nextBooks, nextSettings, loadedFonts)
-    readerChapterRecognitionCache.clear()
-    setBooks(nextBooks.sort((a, b) => b.lastReadAt - a.lastReadAt))
-    setSettings(nextSettings)
-    setRestorePayload(null)
-    showToast(`恢复完成，共 ${nextBooks.length} 本书和 ${loadedFonts.length} 个自定义字体。`)
   }
 
   const appTheme = view === 'reader' ? settings.theme : 'paper'
@@ -3674,6 +3797,14 @@ export default function App() {
         </main>
       )}
 
+      {activityMessage && (
+        <div className="activity-overlay" role="status" aria-live="polite">
+          <span className="spinner" />
+          <strong>{activityMessage}</strong>
+          <small>处理内容较多时需要一点时间，请稍候</small>
+        </div>
+      )}
+
       {scanningFolderId && !folderBrowser && (
         <div className="folder-scan-page" role="status" aria-live="polite">
           <span className="spinner" />
@@ -3690,25 +3821,25 @@ export default function App() {
               <div><h2 id="folder-title">选择书籍</h2><small>{folderBrowser.folder.name}</small></div>
             </div>
             {folderBrowser.archiveReader && <section className="archive-import-options" aria-label="压缩包导入选项">
-              <label className="archive-group-control">
-                <span>自动新建分组</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(folderBrowser.archiveCreateGroup)}
-                  onChange={(event) => setFolderBrowser((current) => current ? { ...current, archiveCreateGroup: event.target.checked } : current)}
-                />
-                <i aria-hidden="true" />
-              </label>
-              {folderBrowser.archiveCreateGroup && <label className="archive-option-field">
-                <span>分组名称</span>
-                <input
+              <div className="archive-group-row">
+                <span className="archive-group-label">自动新建分组</span>
+                {folderBrowser.archiveCreateGroup && <input
+                  className="archive-group-name-input"
                   value={folderBrowser.archiveGroupName || ''}
                   onChange={(event) => setFolderBrowser((current) => current ? { ...current, archiveGroupName: event.target.value } : current)}
-                  placeholder="输入分组名称"
+                  placeholder="分组名称"
                   maxLength={18}
                   aria-label="分组名称"
-                />
-              </label>}
+                />}
+                <label className="archive-group-switch" aria-label="自动新建分组">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(folderBrowser.archiveCreateGroup)}
+                    onChange={(event) => setFolderBrowser((current) => current ? { ...current, archiveCreateGroup: event.target.checked } : current)}
+                  />
+                  <i aria-hidden="true" />
+                </label>
+              </div>
               {folderBrowser.archivePasswordRequired && <label className="archive-option-field archive-password-field">
                 <span>压缩包密码</span>
                 <input
