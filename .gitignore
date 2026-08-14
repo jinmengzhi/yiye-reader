@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.vite/
+*.local
+.vite-server*.log
+android/.gradle/
+android/app/build/
+android/build/
+
+# Local Android outputs and signing configuration
+*.apk
+*.aab
+*.jks
+*.keystore
+android/local.properties
+android/.idea/
+
+# Local Codex files and working references
+.codex-vite.log
+临时测试文件夹/
+参考图片/
+参考文档/
+项目计划.md
