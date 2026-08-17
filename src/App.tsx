@@ -3964,7 +3964,6 @@ export default function App() {
       {sheet === 'library-actions' && (
         <div className="library-popover-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setSheet(null) }}>
           <section className="library-popover compact-library-popover" role="dialog" aria-modal="true" aria-label="书架布局">
-            <p className="library-columns-label">每行书籍</p>
             {([3, 4, 5] as const).map((columns) => (
               <button className={`library-columns-option ${settings.shelfColumns === columns ? 'active' : ''}`} key={columns} aria-pressed={settings.shelfColumns === columns} onClick={() => { void updateSettings({ shelfColumns: columns }); setSheet(null) }}>
                 <span>{columns} 本</span>{settings.shelfColumns === columns && <Icon name="check" size={17} />}

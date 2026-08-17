@@ -388,7 +388,6 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .library-popover-title button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
 .library-popover-action { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; width: 100%; min-height: 43px; padding: 0 8px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; }
 .library-popover > .library-popover-action:first-child { border-top: 0; }
-.library-columns-label { margin: 5px 8px 2px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-family: "Microsoft YaHei", sans-serif; font-size: 10px; }
 .library-columns-option { display: flex; width: 100%; min-height: 36px; align-items: center; justify-content: space-between; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); cursor: pointer; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; }
 .library-columns-option:active { background: rgba(91,94,90,.08); }
 .library-columns-option.active { color: var(--accent); font-weight: 700; }
