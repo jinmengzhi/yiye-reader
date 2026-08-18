@@ -36,6 +36,8 @@
 .native-android .bottom-nav:not(.group-bottom-nav) { height: calc(48px + max(12px, env(safe-area-inset-bottom, 0px))); padding: 3px 18px max(12px, env(safe-area-inset-bottom, 0px)); }
 
 * { box-sizing: border-box; }
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; height: 0; display: none; }
 html, body, #root { height: 100%; min-height: 0; margin: 0; overflow: hidden; overscroll-behavior: none; }
 body { min-width: 320px; min-height: 100vh; min-height: 100dvh; }
 button, select, input { font: inherit; }
@@ -384,6 +386,14 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .library-popover-layer { position: fixed; z-index: 20; inset: 0; background: transparent; }
 .library-popover { position: absolute; top: calc(var(--status-content-inset) + 52px); right: max(16px, calc((100vw - 720px) / 2 + 16px)); width: min(230px, calc(100vw - 32px)); max-height: min(64vh, 480px); padding: 9px 11px; overflow-y: auto; border: 1px solid var(--line); border-radius: 15px; background: #f8f3ea; box-shadow: 0 14px 34px rgba(50,39,29,.2); }
 .compact-library-popover { width: min(138px, calc(100vw - 32px)); padding: 6px; border-radius: 13px; }
+.shelf-options-popover { width: min(188px, calc(100vw - 32px)); max-height: none; padding: 7px 9px; overflow: visible; }
+.library-option-section { display: grid; gap: 4px; padding: 5px 0 7px; border-bottom: 1px solid var(--line); }
+.library-option-section:last-child { padding-bottom: 2px; border-bottom: 0; }
+.library-option-label { padding: 0 8px; color: var(--muted); font-family: "Microsoft YaHei", sans-serif; font-size: 10px; }
+.library-choice-list { display: grid; gap: 2px; }
+.library-choice-list .library-columns-option { width: 100%; min-height: 32px; padding: 0 8px; }
+.library-columns-list { grid-template-columns: 1fr; }
+.library-columns-list .library-columns-option { min-width: 0; justify-content: space-between; }
 .library-popover-title { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 3px 5px 8px; }
 .library-popover-title strong { font-family: "Microsoft YaHei", sans-serif; font-size: 13px; font-weight: 600; }
 .library-popover-title button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }

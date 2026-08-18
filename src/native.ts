@@ -38,15 +38,17 @@ export async function shareNativeBackup(data: Uint8Array, fileName: string): Pro
 interface ShareableTextFile {
   title: string
   content: string
+  sourceUri?: string
+  originalName?: string
 }
 
-function safeSharedFileName(title: string): string {
-  const safeTitle = title
+function safeSharedFileName(name: string, fallbackTitle: string): string {
+  const safeName = name
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
     .replace(/[.\s]+$/g, '')
     .trim()
-    .slice(0, 80)
-  return `${safeTitle || '未命名书籍'}.txt`
+  const stem = (safeName || fallbackTitle).replace(/\.txt$/i, '').slice(0, 80)
+  return `${stem || '未命名书籍'}.txt`
 }
 
 export async function shareNativeTextFiles(books: ShareableTextFile[]): Promise<void> {
@@ -55,7 +57,16 @@ export async function shareNativeTextFiles(books: ShareableTextFile[]): Promise<
   const uris: string[] = []
 
   for (const book of books) {
-    const baseName = safeSharedFileName(book.title)
+    let sourceData: string | null = null
+    if (book.sourceUri) {
+      try {
+        const source = await Filesystem.readFile({ path: book.sourceUri })
+        if (typeof source.data === 'string') sourceData = source.data
+      } catch {
+        // The original file may have been moved or deleted; use the saved text below.
+      }
+    }
+    const baseName = safeSharedFileName(sourceData !== null ? (book.originalName || book.title) : book.title, book.title)
     const stem = baseName.slice(0, -4)
     let fileName = baseName
     let copyNumber = 2
@@ -65,13 +76,20 @@ export async function shareNativeTextFiles(books: ShareableTextFile[]): Promise<
     }
     usedNames.add(fileName.toLocaleLowerCase())
 
-    const result = await Filesystem.writeFile({
-      path: `${folder}/${fileName}`,
-      data: book.content,
-      directory: Directory.Cache,
-      encoding: Encoding.UTF8,
-      recursive: true,
-    })
+    const result = sourceData !== null
+      ? await Filesystem.writeFile({
+          path: `${folder}/${fileName}`,
+          data: sourceData,
+          directory: Directory.Cache,
+          recursive: true,
+        })
+      : await Filesystem.writeFile({
+          path: `${folder}/${fileName}`,
+          data: book.content,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        })
     uris.push(result.uri)
   }
 

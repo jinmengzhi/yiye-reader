@@ -4,6 +4,8 @@ export type CustomFontFamily = `custom:${string}`
 export type ProgressDisplay = 'percent' | 'page'
 export type PageTurnMode = 'scroll' | 'horizontal'
 export type ShelfColumns = 3 | 4 | 5
+export type ShelfSort = 'recent' | 'imported' | 'title' | 'progress' | 'size'
+export type ShelfFilter = 'all' | 'unread' | 'reading' | 'finished'
 export type ChapterRecognition = 'auto' | 'strict' | 'off'
 
 export interface CommonFolder {
@@ -86,6 +88,8 @@ export interface ReaderSettings {
   progressDisplay: ProgressDisplay
   pageTurnMode: PageTurnMode
   shelfColumns: ShelfColumns
+  shelfSort: ShelfSort
+  shelfFilter: ShelfFilter
   lastBookId: string | null
   commonFolders: CommonFolder[]
   bookGroups: BookGroup[]
@@ -115,6 +119,8 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   progressDisplay: 'percent',
   pageTurnMode: 'scroll',
   shelfColumns: 3,
+  shelfSort: 'recent',
+  shelfFilter: 'all',
   lastBookId: null,
   commonFolders: [],
   bookGroups: [],
@@ -152,6 +158,8 @@ export function normalizeSettings(saved: Partial<ReaderSettings> & { commonFolde
     pageMargin: saved?.pageMargin === 16 || saved?.pageMargin === 36 ? saved.pageMargin : 24,
     pageTurnMode: saved?.pageTurnMode === 'horizontal' ? 'horizontal' : 'scroll',
     shelfColumns: saved?.shelfColumns === 4 || saved?.shelfColumns === 5 ? saved.shelfColumns : 3,
+    shelfSort: (['recent', 'imported', 'title', 'progress', 'size'] as const).includes(saved?.shelfSort as ShelfSort) ? saved?.shelfSort as ShelfSort : DEFAULT_SETTINGS.shelfSort,
+    shelfFilter: (['all', 'unread', 'reading', 'finished'] as const).includes(saved?.shelfFilter as ShelfFilter) ? saved?.shelfFilter as ShelfFilter : DEFAULT_SETTINGS.shelfFilter,
     commonColors,
     commonFolders: folders.filter((folder, index, all) => folder.name && all.findIndex((item) => item.id === folder.id) === index),
     bookGroups,

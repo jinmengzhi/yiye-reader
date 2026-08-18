@@ -31,7 +31,7 @@ import {
 import {
   prepareImport,
 } from './encoding'
-import type { Book, BookGroup, ChapterAddition, ChapterRecognition, ChapterRecognitionCacheRecord, CommonFolder, CustomFont, CustomFontFamily, ImportCandidate, ReaderSettings, ReaderTheme } from './types'
+import type { Book, BookGroup, ChapterAddition, ChapterRecognition, ChapterRecognitionCacheRecord, CommonFolder, CustomFont, CustomFontFamily, ImportCandidate, ReaderSettings, ReaderTheme, ShelfFilter, ShelfSort } from './types'
 import { DEFAULT_SETTINGS, normalizeSettings } from './types'
 import { applyNativeStatusBar, isNativeAndroid, shareNativeBackup, shareNativeTextFiles } from './native'
 import {
@@ -80,6 +80,19 @@ interface PendingReaderRestore { bookId: string; textOffset: number; token: numb
 interface ReaderRenderWindow { bookId: string; startOffset: number; endOffset: number; blocks: ReaderBlock[] }
 
 const COVER_COLOR_COUNT = 6
+const SHELF_SORT_OPTIONS: Array<{ value: ShelfSort; label: string }> = [
+  { value: 'recent', label: '最近阅读' },
+  { value: 'imported', label: '导入时间' },
+  { value: 'title', label: '书名' },
+  { value: 'progress', label: '阅读进度' },
+  { value: 'size', label: '文件大小' },
+]
+const SHELF_FILTER_OPTIONS: Array<{ value: ShelfFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'unread', label: '未读' },
+  { value: 'reading', label: '阅读中' },
+  { value: 'finished', label: '已读' },
+]
 const readerPaginationCache = new Map<string, number>()
 // Parsing a large TXT (line splitting + chapter detection) is surprisingly
 // expensive. Keep the parsed document around while the app is alive so that
@@ -361,8 +374,43 @@ function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
 
-function sortBooksByRecent(left: Book, right: Book): number {
+function compareShelfBooks(left: Book, right: Book, sort: ShelfSort): number {
+  if (sort === 'title') return left.title.localeCompare(right.title, 'zh-CN') || (right.lastReadAt - left.lastReadAt)
+  if (sort === 'imported') return (right.importedAt - left.importedAt) || (right.lastReadAt - left.lastReadAt)
+  if (sort === 'progress') return (right.progress - left.progress) || (right.lastReadAt - left.lastReadAt)
+  if (sort === 'size') return (right.size - left.size) || (right.lastReadAt - left.lastReadAt)
   return (right.lastReadAt - left.lastReadAt) || (right.importedAt - left.importedAt)
+}
+
+function matchesShelfFilter(book: Book, filter: ShelfFilter): boolean {
+  if (filter === 'unread') return book.progress <= 0
+  if (filter === 'finished') return book.progress >= 1
+  if (filter === 'reading') return book.progress > 0 && book.progress < 1
+  return true
+}
+
+function shelfItemSortValue(item: ShelfItem, sort: ShelfSort): number | string {
+  if (item.kind === 'book') {
+    if (sort === 'title') return item.book.title
+    if (sort === 'imported') return item.book.importedAt
+    if (sort === 'progress') return item.book.progress
+    if (sort === 'size') return item.book.size
+    return item.book.lastReadAt
+  }
+  if (sort === 'title') return item.group.name
+  if (sort === 'imported') return item.group.createdAt
+  if (sort === 'progress') return item.group.books.length ? item.group.books.reduce((sum, book) => sum + book.progress, 0) / item.group.books.length : 0
+  if (sort === 'size') return item.group.books.reduce((sum, book) => sum + book.size, 0)
+  return item.group.lastActiveAt
+}
+
+function compareShelfItems(left: ShelfItem, right: ShelfItem, sort: ShelfSort): number {
+  const leftValue = shelfItemSortValue(left, sort)
+  const rightValue = shelfItemSortValue(right, sort)
+  const leftRecent = left.kind === 'group' ? left.group.lastActiveAt : left.book.lastReadAt
+  const rightRecent = right.kind === 'group' ? right.group.lastActiveAt : right.book.lastReadAt
+  if (typeof leftValue === 'string' && typeof rightValue === 'string') return leftValue.localeCompare(rightValue, 'zh-CN') || (rightRecent - leftRecent)
+  return (Number(rightValue) - Number(leftValue)) || (rightRecent - leftRecent)
 }
 
 function formatSize(bytes: number): string {
@@ -1326,24 +1374,25 @@ export default function App() {
   const filteredBooks = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase()
     return books
-      .filter((book) => !query || book.title.toLocaleLowerCase().includes(query))
-      .sort(sortBooksByRecent)
-  }, [books, searchQuery])
+      .filter((book) => (!query || book.title.toLocaleLowerCase().includes(query)) && matchesShelfFilter(book, settings.shelfFilter))
+      .sort((left, right) => compareShelfBooks(left, right, settings.shelfSort))
+  }, [books, searchQuery, settings.shelfFilter, settings.shelfSort])
   const shelfGroups = useMemo<ShelfGroup[]>(() => settings.bookGroups
     .map((group) => {
-      const groupBooks = books.filter((book) => book.groupId === group.id).sort(sortBooksByRecent)
-      return { ...group, books: groupBooks, lastActiveAt: groupBooks[0]?.lastReadAt ?? group.createdAt }
+      const groupBooks = books.filter((book) => book.groupId === group.id)
+      return { ...group, books: groupBooks.sort((left, right) => compareShelfBooks(left, right, settings.shelfSort)), lastActiveAt: groupBooks.reduce((latest, book) => Math.max(latest, book.lastReadAt), group.createdAt) }
     })
-    .sort((left, right) => right.lastActiveAt - left.lastActiveAt), [books, settings.bookGroups])
+    .sort((left, right) => right.lastActiveAt - left.lastActiveAt), [books, settings.bookGroups, settings.shelfSort])
   const shelfItems = useMemo<ShelfItem[]>(() => {
+    const filteredBookIds = new Set(filteredBooks.map((book) => book.id))
     const ungrouped = filteredBooks.filter((book) => !book.groupId)
-    const groups = searchQuery.trim() ? shelfGroups
-      .map((group) => ({ ...group, books: group.books.filter((book) => book.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())) }))
-      .filter((group) => group.books.length > 0)
-      : shelfGroups
+    const hasBookFilter = Boolean(searchQuery.trim()) || settings.shelfFilter !== 'all'
+    const groups = shelfGroups
+      .map((group) => ({ ...group, books: hasBookFilter ? group.books.filter((book) => filteredBookIds.has(book.id)) : group.books }))
+      .filter((group) => !hasBookFilter || group.books.length > 0)
     return [...ungrouped.map((book) => ({ kind: 'book' as const, book })), ...groups.map((group) => ({ kind: 'group' as const, group }))]
-      .sort((left, right) => (right.kind === 'book' ? right.book.lastReadAt : right.group.lastActiveAt) - (left.kind === 'book' ? left.book.lastReadAt : left.group.lastActiveAt))
-  }, [filteredBooks, searchQuery, shelfGroups])
+      .sort((left, right) => compareShelfItems(left, right, settings.shelfSort))
+  }, [filteredBooks, searchQuery, settings.shelfFilter, settings.shelfSort, shelfGroups])
   const activeGroup = useMemo(() => {
     const group = shelfGroups.find((item) => item.id === activeGroupId)
     if (!group) return null
@@ -1769,7 +1818,7 @@ export default function App() {
     }
     setActivityMessage(candidates.length === 1 ? '正在准备分享书籍' : `正在准备分享 ${candidates.length} 本书`)
     try {
-      await shareNativeTextFiles(candidates.map((book) => ({ title: book.title, content: book.content })))
+      await shareNativeTextFiles(candidates.map((book) => ({ title: book.title, content: book.content, sourceUri: book.sourceUri, originalName: book.originalName })))
       setSelectedBookIds([])
     } catch (error) {
       showToast(error instanceof Error ? error.message : '分享文件失败，请重试。')
@@ -3996,12 +4045,37 @@ export default function App() {
 
       {sheet === 'library-actions' && (
         <div className="library-popover-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setSheet(null) }}>
-          <section className="library-popover compact-library-popover" role="dialog" aria-modal="true" aria-label="书架布局">
+          <section className="library-popover shelf-options-popover" role="dialog" aria-modal="true" aria-label="书架排序和筛选">
+            <div className="library-option-section">
+              <span className="library-option-label">排序</span>
+              <div className="library-choice-list">
+                {SHELF_SORT_OPTIONS.map((option) => (
+                  <button className={`library-columns-option ${settings.shelfSort === option.value ? 'active' : ''}`} key={option.value} aria-pressed={settings.shelfSort === option.value} onClick={() => void updateSettings({ shelfSort: option.value })}>
+                    <span>{option.label}</span>{settings.shelfSort === option.value && <Icon name="check" size={16} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="library-option-section">
+              <span className="library-option-label">筛选</span>
+              <div className="library-choice-list">
+                {SHELF_FILTER_OPTIONS.map((option) => (
+                  <button className={`library-columns-option ${settings.shelfFilter === option.value ? 'active' : ''}`} key={option.value} aria-pressed={settings.shelfFilter === option.value} onClick={() => void updateSettings({ shelfFilter: option.value })}>
+                    <span>{option.label}</span>{settings.shelfFilter === option.value && <Icon name="check" size={16} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="library-option-section">
+              <span className="library-option-label">每行书籍</span>
+              <div className="library-choice-list library-columns-list">
             {([3, 4, 5] as const).map((columns) => (
-              <button className={`library-columns-option ${settings.shelfColumns === columns ? 'active' : ''}`} key={columns} aria-pressed={settings.shelfColumns === columns} onClick={() => { void updateSettings({ shelfColumns: columns }); setSheet(null) }}>
-                <span>{columns} 本</span>{settings.shelfColumns === columns && <Icon name="check" size={17} />}
-              </button>
+                  <button className={`library-columns-option ${settings.shelfColumns === columns ? 'active' : ''}`} key={columns} aria-pressed={settings.shelfColumns === columns} onClick={() => void updateSettings({ shelfColumns: columns })}>
+                    <span>{columns} 本</span>{settings.shelfColumns === columns && <Icon name="check" size={17} />}
+                  </button>
             ))}
+              </div>
+            </div>
           </section>
         </div>
       )}
