@@ -29,6 +29,13 @@ export interface ChapterAddition {
   subtitleEndOffset?: number
 }
 
+export interface Bookmark {
+  id: string
+  offset: number
+  label: string
+  createdAt: number
+}
+
 export interface CachedChapterHeading {
   offset: number
   title: string
@@ -58,6 +65,7 @@ export interface Book {
   lastReadAt: number
   progress: number
   textOffset: number
+  bookmarks?: Bookmark[]
   groupId?: string
   chapterRecognition?: ChapterRecognition
   chapterExclusions?: number[]

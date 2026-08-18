@@ -31,7 +31,7 @@ import {
 import {
   prepareImport,
 } from './encoding'
-import type { Book, BookGroup, ChapterAddition, ChapterRecognition, ChapterRecognitionCacheRecord, CommonFolder, CustomFont, CustomFontFamily, ImportCandidate, ReaderSettings, ReaderTheme, ShelfFilter, ShelfSort } from './types'
+import type { Book, Bookmark, BookGroup, ChapterAddition, ChapterRecognition, ChapterRecognitionCacheRecord, CommonFolder, CustomFont, CustomFontFamily, ImportCandidate, ReaderSettings, ReaderTheme, ShelfFilter, ShelfSort } from './types'
 import { DEFAULT_SETTINGS, normalizeSettings } from './types'
 import { applyNativeStatusBar, isNativeAndroid, shareNativeBackup, shareNativeTextFiles } from './native'
 import {
@@ -347,7 +347,7 @@ function getBookCoverIndex(book: Book): number {
   return (hash >>> 0) % COVER_COLOR_COUNT
 }
 
-function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more' | 'back' | 'type' | 'moon' | 'archive' | 'upload' | 'download' | 'trash' | 'check' | 'close' | 'search' | 'settings' | 'folder' | 'folder-plus' | 'list' | 'expand' | 'shrink' | 'share'; size?: number }) {
+function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more' | 'back' | 'type' | 'moon' | 'archive' | 'upload' | 'download' | 'trash' | 'check' | 'close' | 'search' | 'settings' | 'folder' | 'folder-plus' | 'list' | 'expand' | 'shrink' | 'share' | 'bookmark' | 'bookmark-filled'; size?: number }) {
   const paths: Record<string, React.ReactNode> = {
     book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v15.5a.5.5 0 0 1-.76.43C17.9 19.13 16.45 19 15 19c-2.2 0-4 .8-5 2-1-1.2-2.8-2-5-2H4V5.5Z"/><path d="M10 21V6.5C10 4.57 8.43 3 6.5 3"/></>,
     plus: <><path d="M12 5v14M5 12h14"/></>,
@@ -370,6 +370,8 @@ function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more
     expand: <><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/><path d="m3 8 6-6M21 8l-6-6M21 16l-6 6M3 16l6 6"/></>,
     shrink: <><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6"/><path d="m3 3 6 6M21 3l-6 6M3 21l6-6M21 21l-6-6"/></>,
     share: <><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/></>,
+    bookmark: <><path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21l-6-3.8L6 21Z"/></>,
+    'bookmark-filled': <><path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21l-6-3.8L6 21Z" fill="currentColor" stroke="none"/></>,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -853,6 +855,12 @@ function ReaderPreferences({
   const [paletteTarget, setPaletteTarget] = useState<'background' | 'text' | null>(null)
   const [paletteHsv, setPaletteHsv] = useState<HsvColor>(() => hexToHsv(settings.backgroundColor))
 
+  useEffect(() => {
+    if (!paletteTarget) return
+    document.documentElement.classList.add('color-palette-open')
+    return () => document.documentElement.classList.remove('color-palette-open')
+  }, [paletteTarget])
+
   function setBackground(value: string) {
     const preset = value === '#171a1b' ? 'night' : value === '#e7eee3' ? 'green' : 'paper'
     if (value === '#f5f0e7' || value === '#e7eee3' || value === '#171a1b') {
@@ -924,7 +932,14 @@ function ReaderPreferences({
             '--reader-ink': settings.textColor,
             '--reader-muted': settings.theme === 'night' ? '#9da19d' : '#74746d',
           } as React.CSSProperties}
-          onPointerDown={(event) => { if (event.target === event.currentTarget) setPaletteTarget(null) }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation()
+            if (event.target === event.currentTarget) setPaletteTarget(null)
+          }}
+          onPointerMove={(event) => event.preventDefault()}
+          onWheel={(event) => { event.preventDefault(); event.stopPropagation() }}
         ><section className="color-palette-panel" role="dialog" aria-modal="true" aria-label={paletteTarget === 'background' ? '背景色板' : '文字色板'}>
           <div className="color-palette-heading"><span>{paletteTarget === 'background' ? '背景色板' : '文字色板'}</span><button disabled={settings.commonColors.includes(activePaletteColor.toLowerCase())} onClick={saveCurrentColor}><Icon name="plus" size={14} />加入常用颜色</button></div>
           <div
@@ -1006,6 +1021,7 @@ export default function App() {
   const [readerCurrentPage, setReaderCurrentPage] = useState(1)
   const [readerPositionReady, setReaderPositionReady] = useState(false)
   const [tocDeleteCandidate, setTocDeleteCandidate] = useState<Chapter | null>(null)
+  const [bookmarkDeleteCandidate, setBookmarkDeleteCandidate] = useState<Bookmark | null>(null)
   const [tocRecognizing, setTocRecognizing] = useState(false)
   const [tocMutation, setTocMutation] = useState<'delete' | 'add' | null>(null)
   const [tocScrollTop, setTocScrollTop] = useState(0)
@@ -1013,6 +1029,8 @@ export default function App() {
   const [tocScrollbarDragging, setTocScrollbarDragging] = useState(false)
   const [tocScrollbarVisible, setTocScrollbarVisible] = useState(false)
   const [readerTextSelection, setReaderTextSelection] = useState<ReaderTextSelection | null>(null)
+  const [bookmarkMutation, setBookmarkMutation] = useState(false)
+  const [tocPanel, setTocPanel] = useState<'chapters' | 'bookmarks'>('chapters')
   const [progressInput, setProgressInput] = useState('')
   const [busy, setBusy] = useState(true)
   const [activityMessage, setActivityMessage] = useState<string | null>(null)
@@ -1082,6 +1100,8 @@ export default function App() {
   const customFontFaces = useRef(new Map<string, FontFace>())
   const tocLongPressTimer = useRef<number | null>(null)
   const tocLongPressed = useRef(false)
+  const bookmarkLongPressTimer = useRef<number | null>(null)
+  const bookmarkLongPressed = useRef(false)
 
   const activeBook = useMemo(
     () => books.find((book) => book.id === activeBookId) ?? null,
@@ -1183,7 +1203,7 @@ export default function App() {
   const tocScrollbarTravel = Math.max(0, tocScrollbarTrackHeight - tocScrollbarThumbHeight)
   const tocScrollbarThumbTop = tocMaxScroll ? Math.min(tocScrollbarTravel, tocScrollTop / tocMaxScroll * tocScrollbarTravel) : 0
   useEffect(() => {
-    if (sheet !== 'toc') return
+    if (sheet !== 'toc' || tocPanel !== 'chapters') return
     const list = tocListRef.current
     if (!list) return
     const updateViewportHeight = () => setTocViewportHeight(Math.max(1, list.clientHeight))
@@ -1207,7 +1227,7 @@ export default function App() {
       setTocScrollbarDragging(false)
       setTocScrollbarVisible(false)
     }
-  }, [sheet])
+  }, [sheet, tocPanel])
   useEffect(() => {
     if (sheet !== 'toc') setTocDeleteCandidate(null)
   }, [sheet])
@@ -1341,7 +1361,8 @@ export default function App() {
         return
       }
       const title = activeBook.content.slice(offset, endOffset).replace(/\s+/g, ' ')
-      const left = Math.max(70, Math.min(window.innerWidth - 70, rect.left + rect.width / 2))
+      const toolbarHalfWidth = Math.min(132, Math.max(88, (window.innerWidth - 16) / 2))
+      const left = Math.max(toolbarHalfWidth, Math.min(window.innerWidth - toolbarHalfWidth, rect.left + rect.width / 2))
       const top = Math.min(window.innerHeight - 52, rect.bottom + 12)
       setReaderTextSelection({ title, offset, endOffset, left, top })
     }
@@ -2892,14 +2913,49 @@ export default function App() {
     setReaderCurrentPage(current)
   }
 
+  function readerTargetLineRect(element: HTMLDivElement, book: Book, blocks: HTMLElement[], targetOffset: number): DOMRect | null {
+    const renderWindow = readerRenderWindowRef.current
+    const targetBlock = blocks.find((block) => {
+      const start = Number(block.dataset.readerOffset)
+      const end = Number(block.dataset.readerEndOffset) || start + (block.textContent?.length ?? 0)
+      return Number.isFinite(start) && targetOffset >= start && targetOffset <= end
+    })
+    if (!targetBlock) return null
+    const blockStart = Number(targetBlock.dataset.readerOffset) || 0
+    let renderedOffset = Math.max(0, targetOffset - blockStart)
+    if (targetBlock.classList.contains('reader-paragraph-group') && renderWindow) {
+      const separatorLength = settings.paragraphSpacing === 0.3 ? 1 : settings.paragraphSpacing === 0.7 ? 2 : 3
+      const indentLength = Math.max(0, Math.round(settings.paragraphIndent))
+      const blockEnd = Number(targetBlock.dataset.readerEndOffset) || book.content.length
+      const groupedBlocks = renderWindow.blocks.filter((item) => item.type === 'paragraph' && item.offset >= blockStart && item.offset < blockEnd)
+      let groupOffset = 0
+      for (const item of groupedBlocks) {
+        if (targetOffset <= item.offset + item.text.length) {
+          renderedOffset = groupOffset + indentLength + Math.max(0, targetOffset - item.offset)
+          break
+        }
+        groupOffset += indentLength + item.text.length + separatorLength
+      }
+    }
+    const textLength = targetBlock.textContent?.length ?? 0
+    if (textLength <= 0) return null
+    const characterOffset = Math.min(textLength - 1, Math.max(0, renderedOffset))
+    return readerTextRange(targetBlock, characterOffset, characterOffset + 1)?.getBoundingClientRect() ?? null
+  }
+
   function scrollReaderToTextOffset(element: HTMLDivElement, book: Book, requestedOffset: number, behavior: ScrollBehavior = 'auto') {
     const targetOffset = Math.max(0, Math.min(book.content.length, requestedOffset))
     const renderWindow = readerRenderWindowRef.current
+    let rerendered = false
     if (!renderWindow
       || renderWindow.bookId !== book.id
       || targetOffset < renderWindow.startOffset
-      || targetOffset > renderWindow.endOffset) {
+      || targetOffset >= renderWindow.endOffset) {
       renderReaderWindow(element, book, targetOffset)
+      rerendered = true
+    }
+    if (rerendered) {
+      element.scrollTo({ left: 0, top: 0, behavior: 'auto' })
     }
     if (targetOffset <= 0) {
       readerPageTargetRef.current = 0
@@ -2912,7 +2968,9 @@ export default function App() {
       const pageWidth = Math.max(1, element.clientWidth)
       const scrollable = Math.max(0, element.scrollWidth - pageWidth)
       let targetLeft = (book.content.length ? targetOffset / book.content.length : book.progress) * scrollable
-      if (anchorIndex >= 0) {
+      const targetRect = readerTargetLineRect(element, book, blocks, targetOffset)
+      if (targetRect) targetLeft = element.scrollLeft + targetRect.left - element.getBoundingClientRect().left
+      if (anchorIndex >= 0 && !targetRect) {
         const anchor = blocks[anchorIndex]
         const anchorOffset = Number(anchor.dataset.readerOffset) || 0
         const nextOffset = Number(blocks[anchorIndex + 1]?.dataset.readerOffset) || book.content.length
@@ -2931,7 +2989,9 @@ export default function App() {
     const containerTop = element.getBoundingClientRect().top
     const scrollable = Math.max(0, element.scrollHeight - element.clientHeight)
     let targetTop = book.progress * scrollable
-    if (anchorIndex >= 0) {
+    const targetRect = readerTargetLineRect(element, book, blocks, targetOffset)
+    if (targetRect) targetTop = element.scrollTop + targetRect.top - containerTop
+    if (anchorIndex >= 0 && !targetRect) {
       const anchor = blocks[anchorIndex]
       const next = blocks[anchorIndex + 1]
       const anchorOffset = Number(anchor.dataset.readerOffset) || 0
@@ -3148,6 +3208,90 @@ export default function App() {
     if (!activeBook) return '0.0%'
     if (settings.progressDisplay === 'percent') return formatProgressPercent(activeBook.progress)
     return `${readerCurrentPage} / ${readerPages}`
+  }
+
+  async function addTextSelectionAsBookmark() {
+    if (!activeBook || !readerTextSelection || bookmarkMutation) return
+    setBookmarkMutation(true)
+    try {
+      const current = activeBookRef.current?.id === activeBook.id ? activeBookRef.current : activeBook
+      const duplicate = (current.bookmarks ?? []).some((bookmark) => Math.abs(bookmark.offset - readerTextSelection.offset) <= 20)
+      if (duplicate) {
+        showToast('这一段已经添加过书签。')
+        clearReaderTextSelection()
+        return
+      }
+      const bookmark: Bookmark = {
+        id: crypto.randomUUID(),
+        offset: readerTextSelection.offset,
+        label: readerTextSelection.title,
+        createdAt: Date.now(),
+      }
+      const next = { ...current, bookmarks: [...(current.bookmarks ?? []), bookmark].sort((left, right) => left.offset - right.offset) }
+      activeBookRef.current = next
+      setBooks((currentBooks) => currentBooks.map((item) => item.id === next.id ? next : item))
+      await saveBook(next)
+      clearReaderTextSelection()
+      showToast('已添加书签。')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '书签保存失败，请重试。')
+    } finally {
+      setBookmarkMutation(false)
+    }
+  }
+
+  async function copyTextSelection() {
+    const text = readerTextSelection?.title
+    if (!text) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        throw new Error('clipboard unavailable')
+      }
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const copied = document.execCommand('copy')
+      textarea.remove()
+      if (!copied) {
+        showToast('复制失败，请重试。')
+        return
+      }
+    }
+    showToast('已复制选中文字。')
+    clearReaderTextSelection()
+  }
+
+  async function removeBookmark(book: Book, bookmarkId: string) {
+    if (bookmarkMutation) return
+    const latest = activeBookRef.current?.id === book.id ? activeBookRef.current : book
+    const next = { ...latest, bookmarks: (latest.bookmarks ?? []).filter((bookmark) => bookmark.id !== bookmarkId) }
+    setBookmarkMutation(true)
+    try {
+      activeBookRef.current = next
+      setBooks((current) => current.map((item) => item.id === next.id ? next : item))
+      await saveBook(next)
+      setBookmarkDeleteCandidate(null)
+      showToast('书签已删除。')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '书签删除失败，请重试。')
+    } finally {
+      setBookmarkMutation(false)
+    }
+  }
+
+  function jumpToBookmark(book: Book, bookmark: Bookmark) {
+    const element = readerRef.current
+    if (!element) return
+    const next = persistExactReaderLocation(book, bookmark.offset)
+    restoreReaderPosition(element, next)
+    setBookmarkDeleteCandidate(null)
+    setSheet(null)
   }
 
   function openProgressJump() {
@@ -3508,6 +3652,23 @@ export default function App() {
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
   }
 
+  function startBookmarkLongPress(bookmark: Bookmark, event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    if (bookmarkLongPressTimer.current !== null) window.clearTimeout(bookmarkLongPressTimer.current)
+    bookmarkLongPressed.current = false
+    event.currentTarget.setPointerCapture(event.pointerId)
+    bookmarkLongPressTimer.current = window.setTimeout(() => {
+      bookmarkLongPressed.current = true
+      setBookmarkDeleteCandidate(bookmark)
+    }, 650)
+  }
+
+  function cancelBookmarkLongPress(event?: React.PointerEvent<HTMLButtonElement>) {
+    if (bookmarkLongPressTimer.current !== null) window.clearTimeout(bookmarkLongPressTimer.current)
+    bookmarkLongPressTimer.current = null
+    if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   async function confirmDeleteBook(removeSource = false) {
     if (!deleteCandidate) return
     if (removeSource) {
@@ -3843,7 +4004,7 @@ export default function App() {
           >
             <header className={`reader-header ${!readerChromeVisible ? 'chrome-hidden' : ''}`}>
             <button className="icon-button" aria-label="返回书架" onClick={closeReader}><Icon name="back" /></button>
-            <div><strong>{activeBook.title}</strong></div>
+            <div className="reader-header-title"><strong>{activeBook.title}</strong></div>
           </header>
           <div
             ref={readerRef}
@@ -3853,6 +4014,7 @@ export default function App() {
             onPointerDown={startReaderGesture}
             onPointerUp={finishReaderGesture}
             onPointerCancel={cancelReaderGesture}
+            onContextMenu={(event) => event.preventDefault()}
             style={{
               fontSize: `${settings.fontSize}px`,
               lineHeight: settings.lineHeight,
@@ -3868,12 +4030,14 @@ export default function App() {
             <time>{readerClock}</time>
             <strong>{activeChapter?.title ?? '未分章'}</strong>
           </nav>
-          <button className={`reader-toc-fab ${!readerChromeVisible ? 'chrome-hidden' : ''}`} aria-label="打开章节目录" onClick={() => setSheet('toc')}><Icon name="list" size={20} /></button>
+          <button className={`reader-toc-fab ${!readerChromeVisible ? 'chrome-hidden' : ''}`} aria-label="打开章节目录" onClick={() => { setTocPanel('chapters'); setSheet('toc') }}><Icon name="list" size={20} /></button>
           <button className={`reader-settings-fab ${!readerChromeVisible ? 'chrome-hidden' : ''}`} aria-label="阅读设置" onClick={() => setSheet('settings')}><Icon name="type" size={20} /></button>
           {readerTextSelection && !sheet && (
             <div ref={readerSelectionToolbarRef} className="reader-selection-toolbar" style={{ left: readerTextSelection.left, top: readerTextSelection.top }}>
               <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => void addTextSelectionAsChapter('title')} disabled={tocMutation === 'add'}>{tocMutation === 'add' ? '处理中' : '设为标题'}</button>
               <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => void addTextSelectionAsChapter('subtitle')} disabled={tocMutation === 'add'}>设为副标题</button>
+              <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => void addTextSelectionAsBookmark()} disabled={bookmarkMutation}>{bookmarkMutation ? '处理中' : '添加书签'}</button>
+              <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => void copyTextSelection()}>复制</button>
             </div>
           )}
         </main>
@@ -4197,7 +4361,26 @@ export default function App() {
               </>
             ) : sheet === 'toc' ? (
               <>
-                 <div className="sheet-title"><div><p className="eyebrow">本书导航</p><h2>目录 <small className="toc-chapter-count">共 {readerDocument.chapters.length} 章</small></h2></div><button className="toc-rescan-button" disabled={tocRecognizing || tocMutation !== null} onClick={() => void recognizeTableOfContents()}>{tocRecognizing ? '识别中…' : '重新识别'}</button></div>
+                 <div className="sheet-title"><div><p className="eyebrow">本书导航</p><h2>{tocPanel === 'bookmarks' ? '书签' : '目录'} <small className="toc-chapter-count">共 {tocPanel === 'bookmarks' ? (activeBook?.bookmarks?.length ?? 0) : readerDocument.chapters.length} 项</small></h2></div><button className="toc-rescan-button" disabled={tocRecognizing || tocMutation !== null || tocPanel === 'bookmarks'} onClick={() => void recognizeTableOfContents()}>{tocRecognizing ? '识别中…' : '重新识别'}</button></div>
+                <div className="toc-tabs" role="tablist" aria-label="本书导航类型">
+                  <button type="button" role="tab" aria-selected={tocPanel === 'chapters'} className={`toc-tab ${tocPanel === 'chapters' ? 'active' : ''}`} onClick={() => { setTocPanel('chapters'); setBookmarkDeleteCandidate(null) }}>目录 <small>{readerDocument.chapters.length}</small></button>
+                  <button type="button" role="tab" aria-selected={tocPanel === 'bookmarks'} className={`toc-tab ${tocPanel === 'bookmarks' ? 'active' : ''}`} onClick={() => { setTocPanel('bookmarks'); setTocDeleteCandidate(null) }}>书签 <small>{activeBook?.bookmarks?.length ?? 0}</small></button>
+                </div>
+                {tocPanel === 'bookmarks' ? (
+                  <section className="toc-bookmarks-panel" aria-label="本书书签">
+                    {(activeBook?.bookmarks?.length ?? 0) > 0 ? <div className="toc-bookmark-list">
+                      {activeBook!.bookmarks!.map((bookmark) => (
+                        <div className="toc-bookmark-row" key={bookmark.id}>
+                          <button className="toc-bookmark-item" onPointerDown={(event) => startBookmarkLongPress(bookmark, event)} onPointerUp={(event) => { const longPressed = bookmarkLongPressed.current; cancelBookmarkLongPress(event); if (!longPressed) { setBookmarkDeleteCandidate(null); jumpToBookmark(activeBook!, bookmark) } }} onPointerCancel={(event) => cancelBookmarkLongPress(event)} onContextMenu={(event) => event.preventDefault()}>
+                            <Icon name="bookmark-filled" size={15} />
+                            <span><strong>{bookmark.label}</strong><small>{formatProgressPercent(activeBook!.content.length ? bookmark.offset / activeBook!.content.length : 0)}</small></span>
+                          </button>
+                          {bookmarkDeleteCandidate?.id === bookmark.id && <button className="toc-delete-button" aria-label={`删除书签 ${bookmark.label}`} disabled={bookmarkMutation} onClick={() => void removeBookmark(activeBook!, bookmark.id)}>{bookmarkMutation ? '删除中' : '删除'}</button>}
+                        </div>
+                      ))}
+                    </div> : <p className="toc-empty">还没有书签。在正文中选中文字后，可以添加为书签。</p>}
+                  </section>
+                ) : (
                 <div className="toc-list-wrap">
                   <div id="toc-list" className="toc-list" ref={tocListRef} onScroll={handleTocScroll} onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>
                     {readerDocument.chapters.length ? (
@@ -4243,6 +4426,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                )}
               </>
             ) : sheet === 'progress' ? (
               <>
