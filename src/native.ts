@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
-import { Directory, Filesystem } from '@capacitor/filesystem'
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 
 interface SystemBarsControlPlugin {
@@ -32,6 +32,54 @@ export async function shareNativeBackup(data: Uint8Array, fileName: string): Pro
     text: '完整备份包含书籍、阅读进度和阅读设置。',
     url: result.uri,
     dialogTitle: '保存或发送备份文件',
+  })
+}
+
+interface ShareableTextFile {
+  title: string
+  content: string
+}
+
+function safeSharedFileName(title: string): string {
+  const safeTitle = title
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
+    .replace(/[.\s]+$/g, '')
+    .trim()
+    .slice(0, 80)
+  return `${safeTitle || '未命名书籍'}.txt`
+}
+
+export async function shareNativeTextFiles(books: ShareableTextFile[]): Promise<void> {
+  const folder = `shared-books/${Date.now()}`
+  const usedNames = new Set<string>()
+  const uris: string[] = []
+
+  for (const book of books) {
+    const baseName = safeSharedFileName(book.title)
+    const stem = baseName.slice(0, -4)
+    let fileName = baseName
+    let copyNumber = 2
+    while (usedNames.has(fileName.toLocaleLowerCase())) {
+      fileName = `${stem} (${copyNumber}).txt`
+      copyNumber += 1
+    }
+    usedNames.add(fileName.toLocaleLowerCase())
+
+    const result = await Filesystem.writeFile({
+      path: `${folder}/${fileName}`,
+      data: book.content,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+      recursive: true,
+    })
+    uris.push(result.uri)
+  }
+
+  await Share.share({
+    title: books.length === 1 ? books[0].title : `分享 ${books.length} 本书`,
+    text: books.length === 1 ? '来自“一页”阅读器的 TXT 书籍。' : `来自“一页”阅读器的 ${books.length} 本 TXT 书籍。`,
+    ...(uris.length === 1 ? { url: uris[0] } : { files: uris }),
+    dialogTitle: books.length === 1 ? '分享书籍' : `分享 ${books.length} 本书`,
   })
 }
 

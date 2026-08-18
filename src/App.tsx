@@ -33,7 +33,7 @@ import {
 } from './encoding'
 import type { Book, BookGroup, ChapterAddition, ChapterRecognition, ChapterRecognitionCacheRecord, CommonFolder, CustomFont, CustomFontFamily, ImportCandidate, ReaderSettings, ReaderTheme } from './types'
 import { DEFAULT_SETTINGS, normalizeSettings } from './types'
-import { applyNativeStatusBar, isNativeAndroid, shareNativeBackup } from './native'
+import { applyNativeStatusBar, isNativeAndroid, shareNativeBackup, shareNativeTextFiles } from './native'
 import {
   CHAPTER_RECOGNITION_VERSION,
   buildReaderBlocks,
@@ -334,7 +334,7 @@ function getBookCoverIndex(book: Book): number {
   return (hash >>> 0) % COVER_COLOR_COUNT
 }
 
-function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more' | 'back' | 'type' | 'moon' | 'archive' | 'upload' | 'download' | 'trash' | 'check' | 'close' | 'search' | 'settings' | 'folder' | 'folder-plus' | 'list' | 'expand' | 'shrink'; size?: number }) {
+function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more' | 'back' | 'type' | 'moon' | 'archive' | 'upload' | 'download' | 'trash' | 'check' | 'close' | 'search' | 'settings' | 'folder' | 'folder-plus' | 'list' | 'expand' | 'shrink' | 'share'; size?: number }) {
   const paths: Record<string, React.ReactNode> = {
     book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v15.5a.5.5 0 0 1-.76.43C17.9 19.13 16.45 19 15 19c-2.2 0-4 .8-5 2-1-1.2-2.8-2-5-2H4V5.5Z"/><path d="M10 21V6.5C10 4.57 8.43 3 6.5 3"/></>,
     plus: <><path d="M12 5v14M5 12h14"/></>,
@@ -356,6 +356,7 @@ function Icon({ name, size = 22 }: { name: 'book' | 'plus' | 'more' | 'grid-more
     list: <><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01" strokeWidth="3"/></>,
     expand: <><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/><path d="m3 8 6-6M21 8l-6-6M21 16l-6 6M3 16l6 6"/></>,
     shrink: <><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6"/><path d="m3 3 6 6M21 3l-6 6M3 21l6-6M21 21l-6-6"/></>,
+    share: <><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/></>,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -368,6 +369,15 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function progressPercentValue(progress: number): string {
+  const normalized = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0
+  return (normalized * 100).toFixed(1)
+}
+
+function formatProgressPercent(progress: number): string {
+  return `${progressPercentValue(progress)}%`
 }
 
 function folderFileId(file: FolderFile): string {
@@ -1751,6 +1761,23 @@ export default function App() {
       : [...current, bookId])
   }
 
+  async function shareBooks(candidates: Book[]) {
+    if (!candidates.length) return
+    if (!isNativeAndroid()) {
+      showToast('分享文件请在安卓应用中使用。')
+      return
+    }
+    setActivityMessage(candidates.length === 1 ? '正在准备分享书籍' : `正在准备分享 ${candidates.length} 本书`)
+    try {
+      await shareNativeTextFiles(candidates.map((book) => ({ title: book.title, content: book.content })))
+      setSelectedBookIds([])
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '分享文件失败，请重试。')
+    } finally {
+      setActivityMessage(null)
+    }
+  }
+
   function clearBookSelectionFromBlank(event: React.MouseEvent<HTMLElement>) {
     if (!selectedBookIds.length) return
     const target = event.target
@@ -3069,15 +3096,15 @@ export default function App() {
   }
 
   function readerProgressLabel(): string {
-    if (!activeBook) return '0%'
-    if (settings.progressDisplay === 'percent') return `${Math.round(activeBook.progress * 100)}%`
+    if (!activeBook) return '0.0%'
+    if (settings.progressDisplay === 'percent') return formatProgressPercent(activeBook.progress)
     return `${readerCurrentPage} / ${readerPages}`
   }
 
   function openProgressJump() {
     if (!activeBook) return
     const value = settings.progressDisplay === 'percent'
-      ? String(Math.round(activeBook.progress * 100))
+      ? progressPercentValue(activeBook.progress)
       : String(readerCurrentPage)
     setProgressInput(value)
     setSheet('progress')
@@ -3096,7 +3123,7 @@ export default function App() {
     }
     const normalized = value.replace(/[^\d.]/g, '')
     const [integer = '', ...decimals] = normalized.split('.')
-    setProgressInput(decimals.length ? `${integer}.${decimals.join('').slice(0, 2)}` : integer.slice(0, 3))
+    setProgressInput(decimals.length ? `${integer}.${decimals.join('').slice(0, 1)}` : integer.slice(0, 3))
   }
 
   function jumpToProgress() {
@@ -3573,17 +3600,23 @@ export default function App() {
             </div>
             {mainTab === 'shelf' && (
               <div className="topbar-actions">
-                {searchOpen ? (
-                  <div ref={searchFieldRef} className="search-field">
-                    <Icon name="search" size={18} />
-                    <input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索书名" aria-label="搜索书名" />
-                  </div>
+                {selectedBooks.length > 0 && !groupBatchAddTargetId ? (
+                  <button className="icon-button" aria-label={`分享已选 ${selectedBooks.length} 本书`} onClick={() => void shareBooks(selectedBooks)}><Icon name="share" /></button>
                 ) : (
-                  <button className="icon-button" aria-label="搜索书籍" onClick={() => setSearchOpen(true)}><Icon name="search" /></button>
+                  <>
+                    {searchOpen ? (
+                      <div ref={searchFieldRef} className="search-field">
+                        <Icon name="search" size={18} />
+                        <input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索书名" aria-label="搜索书名" />
+                      </div>
+                    ) : (
+                      <button className="icon-button" aria-label="搜索书籍" onClick={() => setSearchOpen(true)}><Icon name="search" /></button>
+                    )}
+                    <button className="icon-button library-menu-button" aria-label="书架布局" disabled={!books.length} onClick={() => setSheet('library-actions')}>
+                      <Icon name="grid-more" />
+                    </button>
+                  </>
                 )}
-                <button className="icon-button library-menu-button" aria-label="书架布局" disabled={!books.length} onClick={() => setSheet('library-actions')}>
-                  <Icon name="grid-more" />
-                </button>
               </div>
             )}
           </header>
@@ -3690,7 +3723,7 @@ export default function App() {
                         <span>{item.book.title}</span>
                         <small>TXT</small>
                       </span>
-                      <span className="shelf-book-progress">{Math.round(item.book.progress * 100)}%</span>
+                      <span className="shelf-book-progress">{formatProgressPercent(item.book.progress)}</span>
                     </button>
                     <button className={`book-select-button ${selectedBookIds.includes(item.book.id) ? 'selected' : ''}`} disabled={Boolean(groupBatchAddTargetId && item.book.groupId === groupBatchAddTargetId)} aria-label={`${selectedBookIds.includes(item.book.id) ? '取消选择' : '选择'}《${item.book.title}》`} aria-pressed={selectedBookIds.includes(item.book.id)} onClick={() => toggleBookSelection(item.book.id)}>
                       <Icon name="check" size={14} />
@@ -3722,7 +3755,7 @@ export default function App() {
                   <span>{dragPreview.book.title}</span>
                   <small>TXT</small>
                 </span>
-                <span className="shelf-book-progress">{Math.round(dragPreview.book.progress * 100)}%</span>
+                <span className="shelf-book-progress">{formatProgressPercent(dragPreview.book.progress)}</span>
               </div>}
             </>
           )}
@@ -4035,6 +4068,7 @@ export default function App() {
                   <div className="group-title-block">
                     <h2><button className="group-name-button" onClick={() => { setGroupName(activeGroup.name); setGroupNameError(''); setSheet('rename-group') }}>{activeGroup.name}</button></h2>
                   </div>
+                  {selectedGroupBooks.length > 0 && <button className="icon-button group-share-button" aria-label={`分享已选 ${selectedGroupBooks.length} 本书`} onClick={() => void shareBooks(selectedGroupBooks)}><Icon name="share" size={20} /></button>}
                 </div>
                 {activeGroup.books.length ? (
                   <section className={`group-book-grid columns-${settings.shelfColumns}`} aria-label={`${activeGroup.name}中的书籍`}>
@@ -4042,7 +4076,7 @@ export default function App() {
                       <article className={`group-book-card ${selectedBookIds.includes(book.id) ? 'selected' : ''}`} key={book.id}>
                         <button className="group-book-main" onClick={() => { if (groupBatchAddTargetId) { if (book.groupId !== groupBatchAddTargetId) toggleBookSelection(book.id) } else openBook(book) }}>
                           <span className={`book-cover cover-${getBookCoverIndex(book)}`}><span>{book.title}</span><small>TXT</small></span>
-                          <span>{Math.round(book.progress * 100)}%</span>
+                          <span>{formatProgressPercent(book.progress)}</span>
                         </button>
                         <button className={`book-select-button ${selectedBookIds.includes(book.id) ? 'selected' : ''}`} disabled={Boolean(groupBatchAddTargetId && book.groupId === groupBatchAddTargetId)} aria-label={`${selectedBookIds.includes(book.id) ? '取消选择' : '选择'}《${book.title}》`} aria-pressed={selectedBookIds.includes(book.id)} onClick={() => toggleBookSelection(book.id)}><Icon name="check" size={14} /></button>
                       </article>

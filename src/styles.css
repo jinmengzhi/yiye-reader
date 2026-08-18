@@ -331,8 +331,9 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .group-editor-backdrop { align-items: center; justify-content: center; padding: max(18px, var(--status-content-inset)) 18px calc(18px + var(--keyboard-inset) + var(--system-bottom-inset)); }
 .group-editor-dialog { width: min(calc(100% - 32px), 420px); max-height: min(calc(100dvh - var(--keyboard-inset) - var(--status-content-inset) - var(--system-bottom-inset) - 36px), 520px); padding: 15px 16px 13px; overflow-y: auto; border: 0; border-radius: 12px; background: #f8f3ea; box-shadow: 0 10px 24px rgba(50,39,29,.12); animation: none; }
 .group-editor-dialog .dialog-handle { display: none; }
-.group-sheet-title { align-items: flex-start; margin-bottom: 10px; }
+.group-sheet-title { position: relative; align-items: flex-start; min-height: 23px; margin-bottom: 10px; padding-right: 36px; }
 .group-title-block { min-width: 0; }
+.group-share-button { position: absolute; top: -6px; right: 0; width: 36px; height: 36px; background: transparent; color: var(--accent); }
 .group-name-button { max-width: min(70vw, 420px); padding: 0; overflow: hidden; border: 0; background: transparent; color: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .group-book-grid { display: grid; grid-template-columns: repeat(var(--shelf-columns, 3), minmax(0, 1fr)); gap: 12px 9px; max-height: min(62dvh, 580px); margin-right: -4px; padding: 2px 4px 12px 1px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
 .group-book-grid::-webkit-scrollbar { display: none; }
