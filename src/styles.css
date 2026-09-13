@@ -437,12 +437,14 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .font-options { display: grid; grid-template-columns: repeat(3, auto); gap: 5px; justify-content: flex-end; }
 .font-options button { min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--reader-ink); cursor: pointer; font-size: 11px; }
 .font-options button.active { border-color: var(--accent); background: color-mix(in srgb, var(--reader-bg) 75%, var(--accent) 25%); color: var(--accent); }
-.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-top: 1px solid var(--line); cursor: pointer; }
+.toggle-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-top: 1px solid var(--line); cursor: pointer; }
 .toggle-row span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .toggle-row strong { font-size: 13px; font-weight: 500; }
 .toggle-row small { color: var(--reader-muted); font-family: var(--ui-font); font-size: 10px; }
-.toggle-row input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.toggle-row i { position: relative; flex: 0 0 40px; height: 24px; border-radius: 20px; background: rgba(102,95,84,.25); transition: background .18s; }
+/* Keep the real checkbox on the switch thumb. A 1x1 absolute input elsewhere can
+   make Android WebView pan the visual viewport and push the whole page off-screen. */
+.toggle-row input { position: absolute; z-index: 1; top: 50%; right: 0; width: 40px; height: 24px; margin: 0; transform: translateY(-50%); opacity: 0; cursor: pointer; }
+.toggle-row i { position: relative; flex: 0 0 40px; height: 24px; border-radius: 20px; background: rgba(102,95,84,.25); transition: background .18s; pointer-events: none; }
 .toggle-row i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: transform .18s; }
 .toggle-row input:checked + i { background: var(--accent); }
 .toggle-row input:checked + i::after { transform: translateX(16px); }

@@ -978,13 +978,13 @@ function ReaderPreferences({
         <div className="setting-row"><span>字号</span><div className="stepper"><button disabled={settings.fontSize <= 14} onClick={() => void onUpdate({ fontSize: settings.fontSize - 1 })}>A−</button><strong>{settings.fontSize}</strong><button disabled={settings.fontSize >= 32} onClick={() => void onUpdate({ fontSize: settings.fontSize + 1 })}>A+</button></div></div>
         <div className="setting-row compact-setting-row"><span>行间距</span><div className="segmented">{[1.5, 1.8, 1.9, 2.2].map((value) => <button className={settings.lineHeight === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ lineHeight: value })}>{value}</button>)}</div></div>
         <div className="setting-row compact-setting-row"><span>段间距</span><div className="segmented">{([0.3, 0.7, 1.1] as const).map((value) => <button className={settings.paragraphSpacing === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ paragraphSpacing: value })}>{value === 0.3 ? '窄' : value === 0.7 ? '适中' : '宽'}</button>)}</div></div>
-        <label className="toggle-row"><span><strong>段首缩进</strong><small>统一两字缩进，忽略原文空格</small></span><input type="checkbox" checked={settings.paragraphIndent > 0} onChange={(event) => void onUpdate({ paragraphIndent: event.target.checked ? 2 : 0 })} /><i aria-hidden="true" /></label>
+        <label className="toggle-row"><span><strong>段首缩进</strong><small>统一两字缩进，忽略原文空格</small></span><input type="checkbox" checked={settings.paragraphIndent > 0} onChange={(event) => { event.currentTarget.blur(); void onUpdate({ paragraphIndent: event.target.checked ? 2 : 0 }) }} /><i aria-hidden="true" /></label>
         <div className="setting-row compact-setting-row"><span>页边距</span><div className="segmented">{([16, 24, 36] as const).map((value) => <button className={settings.pageMargin === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ pageMargin: value })}>{value === 16 ? '窄' : value === 24 ? '适中' : '宽'}</button>)}</div></div>
         <div className="setting-row compact-setting-row"><span>翻页方式</span><div className="segmented"><button className={settings.pageTurnMode === 'scroll' ? 'active' : ''} onClick={() => void onUpdate({ pageTurnMode: 'scroll' })}>上下滚动</button><button className={settings.pageTurnMode === 'horizontal' ? 'active' : ''} onClick={() => void onUpdate({ pageTurnMode: 'horizontal' })}>左右翻页</button></div></div>
       </section>
       <section className="reader-settings-group">
         <div className="setting-row font-select-row"><span>字体</span><button className="font-picker-button" disabled={settings.followSystemFont} onClick={onOpenFonts}>{fontLabel}<Icon name="back" size={15} /></button></div>
-        <label className="toggle-row"><span><strong>跟随系统字体</strong><small>整个应用都使用手机系统字体</small></span><input type="checkbox" checked={settings.followSystemFont} onChange={(event) => void onUpdate({ followSystemFont: event.target.checked })} /><i aria-hidden="true" /></label>
+        <label className="toggle-row"><span><strong>跟随系统字体</strong><small>整个应用都使用手机系统字体</small></span><input type="checkbox" checked={settings.followSystemFont} onChange={(event) => { event.currentTarget.blur(); void onUpdate({ followSystemFont: event.target.checked }) }} /><i aria-hidden="true" /></label>
         <div className="color-setting"><span>阅读背景</span><div className="color-options">{READER_BACKGROUNDS.map(({ value, label }) => <button key={value} title={label} aria-label={`${label}背景`} className={settings.backgroundColor.toLowerCase() === value ? 'active' : ''} style={{ background: value }} onClick={() => { if (paletteTarget === 'background') setPaletteHsv(hexToHsv(value)); setBackground(value) }} />)}<button className={`color-palette-toggle ${paletteTarget === 'background' ? 'active' : ''}`} title="打开背景色板" aria-label="打开背景色板" aria-expanded={paletteTarget === 'background'} style={{ '--current-color': settings.backgroundColor } as React.CSSProperties} onClick={() => togglePalette('background')}><Icon name="grid-more" size={16} /></button></div></div>
         <div className="color-setting"><span>文字颜色</span><div className="color-options">{READER_TEXT_COLORS.map(({ value, label }) => <button key={value} title={label} aria-label={`${label}文字`} className={settings.textColor.toLowerCase() === value ? 'active' : ''} style={{ background: value }} onClick={() => { if (paletteTarget === 'text') setPaletteHsv(hexToHsv(value)); void onUpdate({ textColor: value }) }} />)}<button className={`color-palette-toggle ${paletteTarget === 'text' ? 'active' : ''}`} title="打开文字色板" aria-label="打开文字色板" aria-expanded={paletteTarget === 'text'} style={{ '--current-color': settings.textColor } as React.CSSProperties} onClick={() => togglePalette('text')}><Icon name="grid-more" size={16} /></button></div></div>
         {paletteTarget && createPortal(<div
@@ -1209,15 +1209,30 @@ export default function App() {
     const viewport = window.visualViewport
     if (!viewport) return
     let frame = 0
+    const isTextEntry = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) return false
+      if (element instanceof HTMLTextAreaElement) return true
+      if (!(element instanceof HTMLInputElement)) return false
+      const type = (element.type || 'text').toLowerCase()
+      return type === 'text' || type === 'search' || type === 'url' || type === 'email' || type === 'password' || type === 'number' || type === 'tel'
+    }
     const updateKeyboardInset = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
+        const active = document.activeElement
+        // Checkbox/toggle focus can pan the Android visual viewport and shove the
+        // whole settings page above the screen. Drop that focus immediately.
+        if (active instanceof HTMLInputElement && active.type === 'checkbox') {
+          active.blur()
+          window.scrollTo(0, 0)
+        }
         const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
         document.documentElement.style.setProperty('--keyboard-inset', `${Math.round(inset)}px`)
         document.documentElement.style.setProperty('--visual-viewport-height', `${Math.round(viewport.height)}px`)
         document.documentElement.style.setProperty('--visual-viewport-top', `${Math.round(viewport.offsetTop)}px`)
-        if (inset > 80 && document.activeElement instanceof HTMLElement) {
-          document.activeElement.scrollIntoView({ block: 'center', behavior: 'auto' })
+        const focused = document.activeElement
+        if (inset > 80 && focused instanceof HTMLElement && isTextEntry(focused)) {
+          focused.scrollIntoView({ block: 'center', behavior: 'auto' })
         }
       })
     }
@@ -1754,17 +1769,23 @@ export default function App() {
     let cancelled = false
     let frame = 0
     let nestedFrame = 0
-    const settleShelfScroll = () => {
+    const settleShelfLayout = () => {
       if (cancelled || view === 'reader') return
+      if (document.activeElement instanceof HTMLInputElement && document.activeElement.type === 'checkbox') {
+        document.activeElement.blur()
+      }
+      window.scrollTo(0, 0)
       clampShelfScroll()
       frame = requestAnimationFrame(() => {
         nestedFrame = requestAnimationFrame(() => {
-          if (!cancelled) clampShelfScroll()
+          if (cancelled) return
+          window.scrollTo(0, 0)
+          clampShelfScroll()
         })
       })
     }
-    settleShelfScroll()
-    void ensureReaderFontLoaded(settings.fontFamily, settings.followSystemFont).finally(settleShelfScroll)
+    settleShelfLayout()
+    void ensureReaderFontLoaded(settings.fontFamily, settings.followSystemFont).finally(settleShelfLayout)
     return () => {
       cancelled = true
       cancelAnimationFrame(frame)
