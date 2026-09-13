@@ -760,18 +760,30 @@ function readerBlockWindow(document: ReaderDocument, book: Book, targetOffset: n
   let endIndex = startIndex
   while (endIndex < blocks.length && blocks[endIndex].offset < desiredEnd) endIndex += 1
   const selected = blocks.slice(startIndex, Math.max(startIndex + 1, endIndex))
-  const startOffset = selected[0]?.offset ?? 0
+  // Leading blank lines never become blocks, so the first block offset can be > 0.
+  // Treat "first block included" as the true book start so the title renders and
+  // top-edge window shifting does not loop forever on those books.
+  const startOffset = startIndex === 0 ? 0 : (selected[0]?.offset ?? 0)
   const last = selected.at(-1)
-  const endOffset = last ? Math.min(book.content.length, last.offset + last.text.length + 1) : book.content.length
+  const endOffset = endIndex >= blocks.length
+    ? book.content.length
+    : last ? Math.min(book.content.length, last.offset + last.text.length + 1) : book.content.length
   return { bookId: book.id, startOffset, endOffset, blocks: selected }
 }
 
 function readerBlockWindowFromOffsets(document: ReaderDocument, book: Book, startOffset: number, endOffset: number): ReaderRenderWindow {
+  const blocks = startOffset === 0
+    ? document.blocks.filter((block) => block.offset < endOffset)
+    : document.blocks.filter((block) => block.offset >= startOffset && block.offset < endOffset)
+  const firstBookBlock = document.blocks[0]
+  const lastBookBlock = document.blocks.at(-1)
+  const coversStart = Boolean(firstBookBlock && blocks[0] && blocks[0].offset === firstBookBlock.offset)
+  const coversEnd = Boolean(lastBookBlock && blocks.at(-1) && blocks.at(-1)!.offset === lastBookBlock.offset)
   return {
     bookId: book.id,
-    startOffset,
-    endOffset,
-    blocks: document.blocks.filter((block) => block.offset >= startOffset && block.offset < endOffset),
+    startOffset: coversStart ? 0 : (blocks[0]?.offset ?? startOffset),
+    endOffset: coversEnd ? book.content.length : endOffset,
+    blocks,
   }
 }
 
@@ -1599,7 +1611,14 @@ export default function App() {
       && existing.dataset.readerLayoutKey === readerContentLayoutKey(settings)
       && targetOffset >= existingStart
       && targetOffset < existingEnd) {
-      readerRenderWindowRef.current = readerBlockWindowFromOffsets(getCachedReaderDocument(activeBook), activeBook, existingStart, existingEnd)
+      const reused = readerBlockWindowFromOffsets(getCachedReaderDocument(activeBook), activeBook, existingStart, existingEnd)
+      readerRenderWindowRef.current = reused
+      existing.dataset.readerWindowStart = String(reused.startOffset)
+      existing.dataset.readerWindowEnd = String(reused.endOffset)
+      // Old windows could omit the title when leading blank lines made startOffset > 0.
+      if (reused.startOffset === 0 && !existing.querySelector(':scope > h1')) {
+        renderReaderWindow(element, activeBook, targetOffset)
+      }
       return
     }
     const hostKey = readerPaginationCacheKey(activeBook, settings, element.clientWidth, element.clientHeight)
@@ -1614,7 +1633,13 @@ export default function App() {
       element.replaceChildren(prewarmedPaper)
       const prewarmedStart = Number(prewarmedPaper.dataset.readerWindowStart)
       const prewarmedEnd = Number(prewarmedPaper.dataset.readerWindowEnd)
-      readerRenderWindowRef.current = readerBlockWindowFromOffsets(getCachedReaderDocument(activeBook), activeBook, prewarmedStart, prewarmedEnd)
+      const reused = readerBlockWindowFromOffsets(getCachedReaderDocument(activeBook), activeBook, prewarmedStart, prewarmedEnd)
+      readerRenderWindowRef.current = reused
+      prewarmedPaper.dataset.readerWindowStart = String(reused.startOffset)
+      prewarmedPaper.dataset.readerWindowEnd = String(reused.endOffset)
+      if (reused.startOffset === 0 && !prewarmedPaper.querySelector(':scope > h1')) {
+        renderReaderWindow(element, activeBook, targetOffset)
+      }
       return
     }
     renderReaderWindow(element, activeBook, targetOffset)
@@ -1726,8 +1751,26 @@ export default function App() {
     document.documentElement.style.setProperty('--ui-font', nextAppFont)
     document.documentElement.style.setProperty('--reader-font', nextAppFont)
     document.body.style.fontFamily = nextAppFont
-    void ensureReaderFontLoaded(settings.fontFamily, settings.followSystemFont)
-  }, [settings.fontFamily, settings.followSystemFont])
+    let cancelled = false
+    let frame = 0
+    let nestedFrame = 0
+    const settleShelfScroll = () => {
+      if (cancelled || view === 'reader') return
+      clampShelfScroll()
+      frame = requestAnimationFrame(() => {
+        nestedFrame = requestAnimationFrame(() => {
+          if (!cancelled) clampShelfScroll()
+        })
+      })
+    }
+    settleShelfScroll()
+    void ensureReaderFontLoaded(settings.fontFamily, settings.followSystemFont).finally(settleShelfScroll)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+      cancelAnimationFrame(nestedFrame)
+    }
+  }, [settings.fontFamily, settings.followSystemFont, view, mainTab])
 
   useEffect(() => {
     const readingFullscreen = view === 'reader' && !readerChromeVisible
@@ -2719,6 +2762,14 @@ export default function App() {
     setSheet(null)
     setView('shelf')
     setReaderChromeVisible(true)
+  }
+
+  function clampShelfScroll() {
+    const element = shelfViewRef.current
+    if (!element) return
+    const maxScroll = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (element.scrollTop > maxScroll) element.scrollTop = maxScroll
+    if (element.scrollTop < 0) element.scrollTop = 0
   }
 
   function changeMainTab(tab: MainTab) {
