@@ -102,12 +102,54 @@ const readerChapterRecognitionCache = new Map<string, ChapterRecognitionCacheRec
 const readerLoadedFonts = new Set<string>()
 const readerPrewarmHosts = new Map<string, HTMLElement>()
 const READER_PAGINATION_CACHE_KEY = 'one-page-reader-pagination-cache'
-const READER_LAYOUT_VERSION = 2
+const READER_LAYOUT_VERSION = 3
 // Paragraphs are grouped before rendering, so books of this size can be
 // prepared during import without creating one DOM node per source line.
 const MAX_PREWARM_CONTENT_LENGTH = 12_000_000
-const TOC_ROW_HEIGHT = 46
+const TOC_ROW_HEIGHT = 36
 const TOC_OVERSCAN_ROWS = 10
+const PARAGRAPH_INDENT_CHARS = 2
+const LEADING_INDENT_PATTERN = /^[\t \u00a0\u3000]+/
+const SYSTEM_UI_FONT = 'system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+
+function stripLeadingIndent(text: string): string {
+  return text.replace(LEADING_INDENT_PATTERN, '')
+}
+
+function leadingIndentLength(text: string): number {
+  return text.length - stripLeadingIndent(text).length
+}
+
+function paragraphIndentLength(paragraphIndent: number): number {
+  return paragraphIndent > 0 ? PARAGRAPH_INDENT_CHARS : 0
+}
+
+function renderParagraphLine(text: string, paragraphIndent: number): string {
+  return `${'\u3000'.repeat(paragraphIndentLength(paragraphIndent))}${stripLeadingIndent(text)}`
+}
+
+function renderedParagraphLineLength(text: string, paragraphIndent: number): number {
+  return paragraphIndentLength(paragraphIndent) + stripLeadingIndent(text).length
+}
+
+function sourceOffsetFromRenderedLine(item: { offset: number; text: string }, renderedIndex: number, paragraphIndent: number, side: 'start' | 'end' = 'start'): number {
+  const leading = leadingIndentLength(item.text)
+  const indentLength = paragraphIndentLength(paragraphIndent)
+  const strippedLength = item.text.length - leading
+  if (renderedIndex <= indentLength) {
+    return side === 'end' ? item.offset + leading : item.offset + leading
+  }
+  const within = Math.max(0, Math.min(strippedLength, renderedIndex - indentLength))
+  return item.offset + leading + within
+}
+
+function renderedIndexFromSourceOffset(item: { offset: number; text: string }, targetOffset: number, paragraphIndent: number): number {
+  const leading = leadingIndentLength(item.text)
+  const indentLength = paragraphIndentLength(paragraphIndent)
+  const contentOffset = Math.max(0, targetOffset - item.offset)
+  if (contentOffset <= leading) return indentLength
+  return indentLength + Math.min(item.text.length - leading, contentOffset - leading)
+}
 const MAX_ZIP_FILE_SIZE = 100 * 1024 * 1024
 const MAX_ZIP_TEXT_FILES = 500
 const MAX_ZIP_TEXT_FILE_SIZE = 30 * 1024 * 1024
@@ -211,13 +253,19 @@ function customFontCssFamily(id: string): string {
 }
 
 function readerFontCss(fontFamily: string, followSystemFont: boolean): string {
-  if (followSystemFont) return 'system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+  if (followSystemFont) return SYSTEM_UI_FONT
   const importedId = customFontId(fontFamily)
   if (importedId) return `"${customFontCssFamily(importedId)}", "Reader Song", serif`
   if (fontFamily === 'heiti') return '"Microsoft YaHei", "Noto Sans SC", SimHei, sans-serif'
   if (fontFamily === 'kaiti') return '"Reader Kai", serif'
   if (fontFamily === 'yuanti') return '"Reader Round", sans-serif'
   return '"Reader Song", serif'
+}
+
+function appFontCss(fontFamily: string, followSystemFont: boolean): string {
+  // Keep shelf/settings/popovers on the same face as the reader so font
+  // changes are visible across the whole app, not only in the book body.
+  return readerFontCss(fontFamily, followSystemFont)
 }
 
 async function ensureReaderFontLoaded(fontFamily: string, followSystemFont: boolean): Promise<void> {
@@ -286,7 +334,7 @@ async function prewarmReaderPagination(book: Book, settings: ReaderSettings): Pr
   scroll.style.lineHeight = `${settings.fontSize * settings.lineHeight}px`
   scroll.style.setProperty('--reader-page-margin', `${settings.pageMargin}px`)
   scroll.style.setProperty('--paragraph-gap', `${settings.paragraphSpacing === 0.3 ? 0 : settings.paragraphSpacing === 0.7 ? 1 : 2}lh`)
-  scroll.style.setProperty('--paragraph-indent', `${settings.paragraphIndent}em`)
+  scroll.style.setProperty('--paragraph-indent', '0em')
   const requestedLineHeight = settings.fontSize * settings.lineHeight
   const topPadding = Math.min(12, settings.pageMargin)
   const availableHeight = Math.max(requestedLineHeight, height - 22 - topPadding)
@@ -728,8 +776,7 @@ function readerParagraphGroupHtml(blocks: ReaderBlock[], paragraphSpacing: numbe
   const first = blocks[0]
   const last = blocks[blocks.length - 1]
   const separator = '\n'.repeat(paragraphSpacing === 0.3 ? 1 : paragraphSpacing === 0.7 ? 2 : 3)
-  const indent = '\u3000'.repeat(Math.max(0, Math.round(paragraphIndent)))
-  const text = blocks.map((block) => `${indent}${block.text}`).join(separator)
+  const text = blocks.map((block) => renderParagraphLine(block.text, paragraphIndent)).join(separator)
   const endOffset = last.offset + last.text.length + 1
   return `<p class="reader-paragraph reader-paragraph-group" data-reader-offset="${first.offset}" data-reader-end-offset="${endOffset}">${escapeReaderHtml(text)}</p>`
 }
@@ -916,13 +963,13 @@ function ReaderPreferences({
         <div className="setting-row"><span>字号</span><div className="stepper"><button disabled={settings.fontSize <= 14} onClick={() => void onUpdate({ fontSize: settings.fontSize - 1 })}>A−</button><strong>{settings.fontSize}</strong><button disabled={settings.fontSize >= 32} onClick={() => void onUpdate({ fontSize: settings.fontSize + 1 })}>A+</button></div></div>
         <div className="setting-row compact-setting-row"><span>行间距</span><div className="segmented">{[1.5, 1.8, 1.9, 2.2].map((value) => <button className={settings.lineHeight === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ lineHeight: value })}>{value}</button>)}</div></div>
         <div className="setting-row compact-setting-row"><span>段间距</span><div className="segmented">{([0.3, 0.7, 1.1] as const).map((value) => <button className={settings.paragraphSpacing === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ paragraphSpacing: value })}>{value === 0.3 ? '窄' : value === 0.7 ? '适中' : '宽'}</button>)}</div></div>
-        <div className="setting-row compact-setting-row"><span>段首缩进</span><div className="segmented">{([0, 2, 4] as const).map((value) => <button className={settings.paragraphIndent === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ paragraphIndent: value })}>{value === 0 ? '无' : `${value} 字`}</button>)}</div></div>
+        <label className="toggle-row"><span><strong>段首缩进</strong><small>统一两字缩进，忽略原文空格</small></span><input type="checkbox" checked={settings.paragraphIndent > 0} onChange={(event) => void onUpdate({ paragraphIndent: event.target.checked ? 2 : 0 })} /><i aria-hidden="true" /></label>
         <div className="setting-row compact-setting-row"><span>页边距</span><div className="segmented">{([16, 24, 36] as const).map((value) => <button className={settings.pageMargin === value ? 'active' : ''} key={value} onClick={() => void onUpdate({ pageMargin: value })}>{value === 16 ? '窄' : value === 24 ? '适中' : '宽'}</button>)}</div></div>
         <div className="setting-row compact-setting-row"><span>翻页方式</span><div className="segmented"><button className={settings.pageTurnMode === 'scroll' ? 'active' : ''} onClick={() => void onUpdate({ pageTurnMode: 'scroll' })}>上下滚动</button><button className={settings.pageTurnMode === 'horizontal' ? 'active' : ''} onClick={() => void onUpdate({ pageTurnMode: 'horizontal' })}>左右翻页</button></div></div>
       </section>
       <section className="reader-settings-group">
         <div className="setting-row font-select-row"><span>字体</span><button className="font-picker-button" disabled={settings.followSystemFont} onClick={onOpenFonts}>{fontLabel}<Icon name="back" size={15} /></button></div>
-        <label className="toggle-row"><span><strong>跟随系统字体</strong><small>使用手机当前的系统字体</small></span><input type="checkbox" checked={settings.followSystemFont} onChange={(event) => void onUpdate({ followSystemFont: event.target.checked })} /><i aria-hidden="true" /></label>
+        <label className="toggle-row"><span><strong>跟随系统字体</strong><small>整个应用都使用手机系统字体</small></span><input type="checkbox" checked={settings.followSystemFont} onChange={(event) => void onUpdate({ followSystemFont: event.target.checked })} /><i aria-hidden="true" /></label>
         <div className="color-setting"><span>阅读背景</span><div className="color-options">{READER_BACKGROUNDS.map(({ value, label }) => <button key={value} title={label} aria-label={`${label}背景`} className={settings.backgroundColor.toLowerCase() === value ? 'active' : ''} style={{ background: value }} onClick={() => { if (paletteTarget === 'background') setPaletteHsv(hexToHsv(value)); setBackground(value) }} />)}<button className={`color-palette-toggle ${paletteTarget === 'background' ? 'active' : ''}`} title="打开背景色板" aria-label="打开背景色板" aria-expanded={paletteTarget === 'background'} style={{ '--current-color': settings.backgroundColor } as React.CSSProperties} onClick={() => togglePalette('background')}><Icon name="grid-more" size={16} /></button></div></div>
         <div className="color-setting"><span>文字颜色</span><div className="color-options">{READER_TEXT_COLORS.map(({ value, label }) => <button key={value} title={label} aria-label={`${label}文字`} className={settings.textColor.toLowerCase() === value ? 'active' : ''} style={{ background: value }} onClick={() => { if (paletteTarget === 'text') setPaletteHsv(hexToHsv(value)); void onUpdate({ textColor: value }) }} />)}<button className={`color-palette-toggle ${paletteTarget === 'text' ? 'active' : ''}`} title="打开文字色板" aria-label="打开文字色板" aria-expanded={paletteTarget === 'text'} style={{ '--current-color': settings.textColor } as React.CSSProperties} onClick={() => togglePalette('text')}><Icon name="grid-more" size={16} /></button></div></div>
         {paletteTarget && createPortal(<div
@@ -1057,6 +1104,8 @@ export default function App() {
   const saveTimer = useRef<number | null>(null)
   const progressSaveChain = useRef<Promise<void>>(Promise.resolve())
   const readerGestureRef = useRef<ReaderGesture | null>(null)
+  const readerPointerActiveRef = useRef(false)
+  const shelfViewRef = useRef<HTMLElement | null>(null)
   const suppressReaderClick = useRef(false)
   const readerPageTargetRef = useRef<number | null>(null)
   const readerRestoreRef = useRef(false)
@@ -1261,7 +1310,7 @@ export default function App() {
       let endOffset = offset
       let activeRange: Range | null = null
       const separatorLength = settings.paragraphSpacing === 0.3 ? 1 : settings.paragraphSpacing === 0.7 ? 2 : 3
-      const indentLength = Math.max(0, Math.round(settings.paragraphIndent))
+      const indentLength = paragraphIndentLength(settings.paragraphIndent)
       const renderedBoundaryIndex = (block: HTMLElement, container: Node, boundaryOffset: number) => {
         const prefix = document.createRange()
         prefix.selectNodeContents(block)
@@ -1283,9 +1332,11 @@ export default function App() {
         let renderedOffset = 0
         for (let index = 0; index < groupedBlocks.length; index += 1) {
           const item = groupedBlocks[index]
-          const lineStart = renderedOffset + indentLength
-          const lineEnd = lineStart + item.text.length
-          if (renderedIndex <= lineEnd) return item.offset + Math.max(0, Math.min(item.text.length, renderedIndex - lineStart))
+          const lineLength = renderedParagraphLineLength(item.text, settings.paragraphIndent)
+          const lineEnd = renderedOffset + lineLength
+          if (renderedIndex <= lineEnd) {
+            return sourceOffsetFromRenderedLine(item, renderedIndex - renderedOffset, settings.paragraphIndent, side)
+          }
           const separatorEnd = lineEnd + separatorLength
           if (renderedIndex < separatorEnd) {
             return side === 'start' ? (groupedBlocks[index + 1]?.offset ?? item.offset + item.text.length) : item.offset + item.text.length
@@ -1306,17 +1357,15 @@ export default function App() {
           item.type === 'paragraph' && item.offset >= blockStart && item.offset < blockEnd) ?? []
         let renderedOffset = 0
         for (const item of groupedBlocks) {
-          const lineStart = renderedOffset + indentLength
-          const lineEnd = lineStart + item.text.length
+          const lineLength = renderedParagraphLineLength(item.text, settings.paragraphIndent)
+          const lineEnd = renderedOffset + lineLength
           if (selectionStart <= lineEnd) {
-            const leadingSpace = item.text.length - item.text.trimStart().length
-            const trailingSpace = item.text.length - item.text.trimEnd().length
-            const contentStart = lineStart + leadingSpace
-            const contentEnd = Math.max(contentStart, lineEnd - trailingSpace)
+            const contentStart = renderedOffset + indentLength
+            const contentEnd = lineEnd
             const visualLine = readerVisualLineRange(startBlock, selectionStart, contentStart, contentEnd)
             if (visualLine) {
-              offset = item.offset + visualLine.start - lineStart
-              endOffset = item.offset + visualLine.end - lineStart
+              offset = sourceOffsetFromRenderedLine(item, visualLine.start - renderedOffset, settings.paragraphIndent, 'start')
+              endOffset = sourceOffsetFromRenderedLine(item, visualLine.end - renderedOffset, settings.paragraphIndent, 'end')
               activeRange = visualLine.range
             }
             break
@@ -1668,6 +1717,14 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(null), 2600)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    const nextAppFont = appFontCss(settings.fontFamily, settings.followSystemFont)
+    document.documentElement.style.setProperty('--ui-font', nextAppFont)
+    document.documentElement.style.setProperty('--reader-font', nextAppFont)
+    document.body.style.fontFamily = nextAppFont
+    void ensureReaderFontLoaded(settings.fontFamily, settings.followSystemFont)
+  }, [settings.fontFamily, settings.followSystemFont])
 
   useEffect(() => {
     const readingFullscreen = view === 'reader' && !readerChromeVisible
@@ -2666,6 +2723,7 @@ export default function App() {
     setSearchOpen(false)
     setSearchQuery('')
     setSelectedBookIds([])
+    if (shelfViewRef.current) shelfViewRef.current.scrollTop = 0
   }
 
   function renderReaderWindow(element: HTMLDivElement, book: Book, targetOffset: number, direction: -1 | 0 | 1 = 0): ReaderRenderWindow {
@@ -2809,15 +2867,26 @@ export default function App() {
   }
 
   function syncReaderPageGrid(element: HTMLDivElement): void {
-    const requestedLineHeight = settings.fontSize * settings.lineHeight
-    const bottomPadding = 22
     const topPadding = Math.min(12, settings.pageMargin)
+    const bottomPadding = 22
+    const pageTopPadding = `${topPadding}px`
+    const pageBottomPadding = `${bottomPadding}px`
+    // Scroll mode must keep the user's natural line-height. Fitting an integer
+    // number of lines to the viewport forces top-of-screen line alignment and
+    // feels like the page jumps when entering immersive reading.
+    if (settings.pageTurnMode !== 'horizontal') {
+      const naturalLineHeight = `${settings.fontSize * settings.lineHeight}px`
+      if (element.style.lineHeight !== String(settings.lineHeight)) element.style.lineHeight = String(settings.lineHeight)
+      if (element.style.getPropertyValue('--reader-line-height') !== naturalLineHeight) element.style.setProperty('--reader-line-height', naturalLineHeight)
+      if (element.style.getPropertyValue('--reader-page-top-padding') !== pageTopPadding) element.style.setProperty('--reader-page-top-padding', pageTopPadding)
+      if (element.style.getPropertyValue('--reader-page-bottom-padding') !== pageBottomPadding) element.style.setProperty('--reader-page-bottom-padding', pageBottomPadding)
+      return
+    }
+    const requestedLineHeight = settings.fontSize * settings.lineHeight
     const availableHeight = Math.max(requestedLineHeight, element.clientHeight - bottomPadding - topPadding)
     const lineCount = Math.max(1, Math.round(availableHeight / requestedLineHeight))
     const fittedLineHeight = availableHeight / lineCount
     const lineHeight = `${fittedLineHeight}px`
-    const pageTopPadding = `${topPadding}px`
-    const pageBottomPadding = `${bottomPadding}px`
     if (element.style.lineHeight !== lineHeight) element.style.lineHeight = lineHeight
     if (element.style.getPropertyValue('--reader-line-height') !== lineHeight) element.style.setProperty('--reader-line-height', lineHeight)
     if (element.style.getPropertyValue('--reader-page-top-padding') !== pageTopPadding) element.style.setProperty('--reader-page-top-padding', pageTopPadding)
@@ -2925,16 +2994,15 @@ export default function App() {
     let renderedOffset = Math.max(0, targetOffset - blockStart)
     if (targetBlock.classList.contains('reader-paragraph-group') && renderWindow) {
       const separatorLength = settings.paragraphSpacing === 0.3 ? 1 : settings.paragraphSpacing === 0.7 ? 2 : 3
-      const indentLength = Math.max(0, Math.round(settings.paragraphIndent))
       const blockEnd = Number(targetBlock.dataset.readerEndOffset) || book.content.length
       const groupedBlocks = renderWindow.blocks.filter((item) => item.type === 'paragraph' && item.offset >= blockStart && item.offset < blockEnd)
       let groupOffset = 0
       for (const item of groupedBlocks) {
         if (targetOffset <= item.offset + item.text.length) {
-          renderedOffset = groupOffset + indentLength + Math.max(0, targetOffset - item.offset)
+          renderedOffset = groupOffset + renderedIndexFromSourceOffset(item, targetOffset, settings.paragraphIndent)
           break
         }
-        groupOffset += indentLength + item.text.length + separatorLength
+        groupOffset += renderedParagraphLineLength(item.text, settings.paragraphIndent) + separatorLength
       }
     }
     const textLength = targetBlock.textContent?.length ?? 0
@@ -3095,6 +3163,7 @@ export default function App() {
   function shiftReaderWindowIfNeeded(element: HTMLDivElement, book: Book, textOffset: number): void {
     const renderWindow = readerRenderWindowRef.current
     if (!renderWindow || renderWindow.bookId !== book.id || readerRestoreRef.current) return
+    if (readerPointerActiveRef.current) return
     const horizontal = settings.pageTurnMode === 'horizontal'
     const scrollable = Math.max(1, horizontal
       ? element.scrollWidth - element.clientWidth
@@ -3132,12 +3201,33 @@ export default function App() {
     if (readerSnapshotTimerRef.current !== null) window.clearTimeout(readerSnapshotTimerRef.current)
     readerSnapshotTimerRef.current = window.setTimeout(() => {
       readerSnapshotTimerRef.current = null
+      if (readerPointerActiveRef.current) return
       const next = getReaderSnapshot()
       if (next) {
         persistReaderSnapshot(next)
         shiftReaderWindowIfNeeded(element, next, next.textOffset)
       }
-    }, 120)
+    }, 220)
+  }
+
+  function setReaderPointerActive(active: boolean) {
+    readerPointerActiveRef.current = active
+    const element = readerRef.current
+    if (element) element.classList.toggle('reader-pointer-active', active)
+    if (!active) {
+      const current = readerRef.current
+      if (!current || readerRestoreRef.current) return
+      if (readerSnapshotTimerRef.current !== null) window.clearTimeout(readerSnapshotTimerRef.current)
+      readerSnapshotTimerRef.current = window.setTimeout(() => {
+        readerSnapshotTimerRef.current = null
+        if (readerPointerActiveRef.current) return
+        const next = getReaderSnapshot()
+        if (next) {
+          persistReaderSnapshot(next)
+          shiftReaderWindowIfNeeded(current, next, next.textOffset)
+        }
+      }, 80)
+    }
   }
 
   function turnReaderPage(direction: -1 | 1) {
@@ -3166,12 +3256,14 @@ export default function App() {
   }
 
   function startReaderGesture(event: React.PointerEvent<HTMLDivElement>) {
+    setReaderPointerActive(true)
     if (settings.pageTurnMode !== 'horizontal') return
     readerGestureRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   function finishReaderGesture(event: React.PointerEvent<HTMLDivElement>) {
+    setReaderPointerActive(false)
     if (settings.pageTurnMode !== 'horizontal') return
     const start = readerGestureRef.current
     readerGestureRef.current = null
@@ -3191,6 +3283,7 @@ export default function App() {
   }
 
   function cancelReaderGesture(event: React.PointerEvent<HTMLDivElement>) {
+    setReaderPointerActive(false)
     readerGestureRef.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
   }
@@ -3769,7 +3862,14 @@ export default function App() {
   const appTheme = view === 'reader' ? settings.theme : 'paper'
 
   return (
-    <div className={`app theme-${appTheme}`}>
+    <div
+      className={`app theme-${appTheme}${sheet ? ' sheet-open' : ''}`}
+      style={{
+        '--ui-font': appFontCss(settings.fontFamily, settings.followSystemFont),
+        '--reader-font': appFontCss(settings.fontFamily, settings.followSystemFont),
+        fontFamily: appFontCss(settings.fontFamily, settings.followSystemFont),
+      } as React.CSSProperties}
+    >
       <input
         ref={txtInputRef}
         className="visually-hidden"
@@ -3802,7 +3902,7 @@ export default function App() {
       />
 
       {view === 'shelf' && (
-        <main className={`shelf-view ${mainTab === 'settings' ? 'settings-view' : ''}`} onClick={mainTab === 'shelf' && !groupBatchAddTargetId ? clearBookSelectionFromBlank : undefined}>
+        <main ref={shelfViewRef} className={`shelf-view ${mainTab === 'settings' ? 'settings-view' : ''}`} onClick={mainTab === 'shelf' && !groupBatchAddTargetId ? clearBookSelectionFromBlank : undefined}>
           <header className="topbar">
             <div className="topbar-title">
               <p className="eyebrow">一页</p>
@@ -3994,12 +4094,13 @@ export default function App() {
       )}
       {activeBook && (
         <main
-          className={`reader-view mode-${settings.pageTurnMode} ${view !== 'reader' ? 'reader-inactive' : ''} ${view === 'reader' && !readerPositionReady ? 'reader-position-pending' : ''} ${sheet === 'settings' ? 'reader-settings-open' : ''}`}
+          className={`reader-view mode-${settings.pageTurnMode} ${view !== 'reader' ? 'reader-inactive' : ''} ${view === 'reader' && !readerPositionReady ? 'reader-position-pending' : ''} ${sheet === 'settings' || sheet === 'fonts' || sheet === 'progress' ? 'reader-settings-open' : ''}`}
           aria-hidden={view !== 'reader'}
           style={{
             '--reader-bg': settings.backgroundColor,
             '--reader-ink': settings.textColor,
             '--reader-font': readerFontCss(settings.fontFamily, settings.followSystemFont),
+            '--ui-font': appFontCss(settings.fontFamily, settings.followSystemFont),
           } as React.CSSProperties}
           >
             <header className={`reader-header ${!readerChromeVisible ? 'chrome-hidden' : ''}`}>
@@ -4020,7 +4121,7 @@ export default function App() {
               lineHeight: settings.lineHeight,
               '--reader-line-height': `${settings.fontSize * settings.lineHeight}px`,
               '--paragraph-gap': `${settings.paragraphSpacing === 0.3 ? 0 : settings.paragraphSpacing === 0.7 ? 1 : 2}lh`,
-              '--paragraph-indent': `${settings.paragraphIndent}em`,
+              '--paragraph-indent': '0em',
               '--reader-page-margin': `${settings.pageMargin}px`,
             } as React.CSSProperties}
           />
@@ -4349,9 +4450,12 @@ export default function App() {
               '--reader-bg': settings.backgroundColor,
               '--reader-ink': settings.textColor,
               '--reader-muted': settings.theme === 'night' ? '#9da19d' : '#74746d',
+              '--reader-font': readerFontCss(settings.fontFamily, settings.followSystemFont),
+              '--ui-font': appFontCss(settings.fontFamily, settings.followSystemFont),
+              fontFamily: appFontCss(settings.fontFamily, settings.followSystemFont),
             } as React.CSSProperties : undefined}
           >
-            <div className="dialog-handle" />
+            {sheet !== 'toc' && <div className="dialog-handle" />}
             {sheet === 'settings' ? (
               <>
                 <div className="sheet-title"><h2>阅读设置</h2></div>
@@ -4361,7 +4465,7 @@ export default function App() {
               </>
             ) : sheet === 'toc' ? (
               <>
-                 <div className="sheet-title"><div><p className="eyebrow">本书导航</p><h2>{tocPanel === 'bookmarks' ? '书签' : '目录'} <small className="toc-chapter-count">共 {tocPanel === 'bookmarks' ? (activeBook?.bookmarks?.length ?? 0) : readerDocument.chapters.length} 项</small></h2></div><button className="toc-rescan-button" disabled={tocRecognizing || tocMutation !== null || tocPanel === 'bookmarks'} onClick={() => void recognizeTableOfContents()}>{tocRecognizing ? '识别中…' : '重新识别'}</button></div>
+                 <div className="sheet-title toc-sheet-title"><div><h2>{tocPanel === 'bookmarks' ? '书签' : '目录'} <small className="toc-chapter-count">共 {tocPanel === 'bookmarks' ? (activeBook?.bookmarks?.length ?? 0) : readerDocument.chapters.length} 项</small></h2></div><button className="toc-rescan-button" disabled={tocRecognizing || tocMutation !== null || tocPanel === 'bookmarks'} onClick={() => void recognizeTableOfContents()}>{tocRecognizing ? '识别中…' : '重新识别'}</button></div>
                 <div className="toc-tabs" role="tablist" aria-label="本书导航类型">
                   <button type="button" role="tab" aria-selected={tocPanel === 'chapters'} className={`toc-tab ${tocPanel === 'chapters' ? 'active' : ''}`} onClick={() => { setTocPanel('chapters'); setBookmarkDeleteCandidate(null) }}>目录 <small>{readerDocument.chapters.length}</small></button>
                   <button type="button" role="tab" aria-selected={tocPanel === 'bookmarks'} className={`toc-tab ${tocPanel === 'bookmarks' ? 'active' : ''}`} onClick={() => { setTocPanel('bookmarks'); setTocDeleteCandidate(null) }}>书签 <small>{activeBook?.bookmarks?.length ?? 0}</small></button>
@@ -4437,7 +4541,7 @@ export default function App() {
                 </form>
               </>
             ) : sheet === 'fonts' ? (
-              <>
+              <div className="font-sheet-scroll" onTouchMove={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
                 <div className="sheet-title"><h2>选择字体</h2></div>
                 <button className="font-import-button" onClick={() => customFontInputRef.current?.click()}><Icon name="plus" size={18} /><span><strong>导入字体</strong><small>TTF、OTF、HWT</small></span></button>
                 <div className="font-picker-list">
@@ -4459,7 +4563,7 @@ export default function App() {
                     </div>
                   </section>
                 )}
-              </>
+              </div>
             ) : (
               <>
                 <div className="sheet-title"><div><p className="eyebrow">本机数据</p><h2>备份与恢复</h2></div><button className="icon-button" onClick={() => setSheet(null)}><Icon name="close" /></button></div>

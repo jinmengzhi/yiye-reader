@@ -163,6 +163,7 @@ export function normalizeSettings(saved: Partial<ReaderSettings> & { commonFolde
     ...DEFAULT_SETTINGS,
     ...(saved ?? {}),
     fontFamily,
+    paragraphIndent: Number(saved?.paragraphIndent) > 0 ? 2 : 0,
     pageMargin: saved?.pageMargin === 16 || saved?.pageMargin === 36 ? saved.pageMargin : 24,
     pageTurnMode: saved?.pageTurnMode === 'horizontal' ? 'horizontal' : 'scroll',
     shelfColumns: saved?.shelfColumns === 4 || saved?.shelfColumns === 5 ? saved.shelfColumns : 3,
