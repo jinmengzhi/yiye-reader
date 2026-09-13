@@ -54,6 +54,32 @@ try {
     '　　正文。',
   ].join('\n')
   assert.deepEqual(detectChapterHeadings(unitless).map((chapter) => chapter.title), ['1 启明制造厂', '2 启明制造厂', '第3 茶艺速成班'])
+  assert.deepEqual(detectChapterHeadings(unitless, 'standard').map((chapter) => chapter.title), ['1 启明制造厂', '2 启明制造厂', '第3 茶艺速成班'])
+
+  const soloNumeric = [
+    '1',
+    `${'本章正文内容较多，用于拉开章节间距。'.repeat(8)}`,
+    '',
+    '2',
+    `${'第二章正文内容较多，用于拉开章节间距。'.repeat(8)}`,
+    '',
+    '3',
+    `${'第三章正文内容较多，用于拉开章节间距。'.repeat(8)}`,
+  ].join('\n')
+  assert.equal(detectChapterHeadings(soloNumeric, 'standard').length, 0, '标准方案不应识别纯数字单行标题')
+  assert.deepEqual(detectChapterHeadings(soloNumeric, 'numeric').map((chapter) => chapter.title), ['1', '2', '3'], '数字标题方案应识别纯数字单行')
+  assert.deepEqual(detectChapterHeadings(soloNumeric, 'auto').map((chapter) => chapter.title), [], '旧 auto 应兼容为标准方案')
+
+  const numberedList = [
+    '步骤如下：',
+    '1',
+    '打开设备',
+    '2',
+    '点击按钮',
+    '3',
+    '完成设置',
+  ].join('\n')
+  assert.equal(detectChapterHeadings(numberedList, 'numeric').length, 0, '数字标题方案仍应挡住短步骤编号')
 
   const composite = [1, 2, 3, 4].flatMap((number) => [
     `第${number}章 示例单元`,

@@ -1,6 +1,35 @@
 import type { CachedChapterHeading, ChapterAddition, ChapterRecognition } from './types'
 
-export const CHAPTER_RECOGNITION_VERSION = 2
+export const CHAPTER_RECOGNITION_VERSION = 3
+
+export const CHAPTER_RECOGNITION_PROFILES = [
+  { id: 'standard', label: '标准' },
+  { id: 'numeric', label: '数字标题' },
+] as const
+
+export type ChapterRecognitionProfile = (typeof CHAPTER_RECOGNITION_PROFILES)[number]['id']
+
+export function normalizeChapterRecognition(value: ChapterRecognition | undefined): ChapterRecognition {
+  if (value === 'numeric' || value === 'strict' || value === 'off' || value === 'standard') return value
+  return 'standard'
+}
+
+export function chapterRecognitionProfile(value: ChapterRecognition | undefined): ChapterRecognitionProfile {
+  const normalized = normalizeChapterRecognition(value)
+  return normalized === 'numeric' ? 'numeric' : 'standard'
+}
+
+export function chapterRecognitionLabel(value: ChapterRecognition | undefined): string {
+  const profile = chapterRecognitionProfile(value)
+  return CHAPTER_RECOGNITION_PROFILES.find((item) => item.id === profile)?.label ?? '标准'
+}
+
+export function nextChapterRecognitionProfile(value: ChapterRecognition | undefined): ChapterRecognitionProfile {
+  const current = chapterRecognitionProfile(value)
+  const index = CHAPTER_RECOGNITION_PROFILES.findIndex((item) => item.id === current)
+  const next = CHAPTER_RECOGNITION_PROFILES[(index + 1 + CHAPTER_RECOGNITION_PROFILES.length) % CHAPTER_RECOGNITION_PROFILES.length]
+  return next.id
+}
 
 export type ReaderBlockType = 'paragraph' | 'chapter' | 'chapter-subtitle'
 
@@ -36,7 +65,7 @@ type LineInfo = {
   afterBlank: boolean
 }
 
-type AnchorKind = 'explicit' | 'english' | 'named' | 'unitless'
+type AnchorKind = 'explicit' | 'english' | 'named' | 'unitless' | 'solo'
 
 type AnchorCandidate = {
   line: LineInfo
@@ -51,8 +80,12 @@ const EXPLICIT_VOLUME = new RegExp(`^(?:正文\\s*)?(?:[上下中]\\s*)?(?:卷|�
 const ENGLISH_CHAPTER = new RegExp(`^(?:chapter|chap\\.?|volume|vol\\.?|part|book|no\\.?)\\s*(${CHAPTER_NUMBER})(?:\\s+.*)?$`, 'i')
 const PREFIXED_UNITLESS = new RegExp(`^第\\s*(${CHAPTER_NUMBER})[ \\t\\u3000]{2,}\\S.*$`, 'i')
 const NUMERIC_UNITLESS = new RegExp(`^[【\\[（(]?\\s*(${CHAPTER_NUMBER})(?:[】\\]）)》])?[ \\t\\u3000]{2,}\\S.*$`, 'i')
+const SOLO_NUMERIC = new RegExp(`^[【\\[（(]?\\s*(${CHAPTER_NUMBER})(?:[】\\]）)》])?\\s*$`, 'i')
 const NAMED_CHAPTER = /^(?:序章|序幕|楔子|引子|引言|序言|前言|尾声|终章|终篇|大结局|番外|后记|后序|上卷|中卷|下卷)(?:\s*\d{0,4}|\s*[一二三四五六七八九十百千万零〇两]{0,8})?(?:\s*(?:之|篇|章)?\s*.*)?$/
 const ALLOWED_CLOSING_BRACKETS = new Set([...')]）]】}〕〉》'])
+const SOLO_NUMERIC_MIN_CHAIN = 3
+const SOLO_NUMERIC_MIN_GAP = 80
+const SOLO_NUMERIC_SPACED_GAP = 200
 
 function normalizeTitle(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
@@ -118,7 +151,7 @@ function makeLines(text: string): LineInfo[] {
   return lines
 }
 
-function anchorCandidate(line: LineInfo): AnchorCandidate | null {
+function anchorCandidate(line: LineInfo, allowSoloNumeric: boolean): AnchorCandidate | null {
   const text = line.text
   if (!text || text.length > 100 || hasTerminalChapterPunctuation(text)) return null
   let match = text.match(EXPLICIT_CHAPTER)
@@ -130,6 +163,14 @@ function anchorCandidate(line: LineInfo): AnchorCandidate | null {
   if (NAMED_CHAPTER.test(text)) return { line, kind: 'named', number: null }
   match = text.match(PREFIXED_UNITLESS) ?? text.match(NUMERIC_UNITLESS)
   if (match) return { line, kind: 'unitless', number: parseChineseNumber(match[1]) }
+  if (allowSoloNumeric) {
+    match = text.match(SOLO_NUMERIC)
+    if (match) {
+      const number = parseChineseNumber(match[1])
+      if (number === null) return null
+      return { line, kind: 'solo', number }
+    }
+  }
   return null
 }
 
@@ -140,7 +181,7 @@ function percentile(values: number[], ratio: number): number {
 }
 
 function supportedUnitlessOffsets(candidates: AnchorCandidate[]): Set<number> {
-  const numeric = candidates.filter((candidate) => candidate.number !== null)
+  const numeric = candidates.filter((candidate) => candidate.kind !== 'solo' && candidate.number !== null)
   const supported = new Set<number>()
   let chain: AnchorCandidate[] = []
   const flush = () => {
@@ -148,6 +189,42 @@ function supportedUnitlessOffsets(candidates: AnchorCandidate[]): Set<number> {
     chain = []
   }
   for (const candidate of numeric) {
+    const previous = chain.at(-1)
+    if (!previous || candidate.number === (previous.number as number) + 1) chain.push(candidate)
+    else {
+      flush()
+      chain.push(candidate)
+    }
+  }
+  flush()
+  return supported
+}
+
+function supportedSoloNumericOffsets(candidates: AnchorCandidate[]): Set<number> {
+  const solos = candidates.filter((candidate) => candidate.kind === 'solo' && candidate.number !== null)
+  const supported = new Set<number>()
+  let chain: AnchorCandidate[] = []
+  const flush = () => {
+    if (chain.length < SOLO_NUMERIC_MIN_CHAIN) {
+      chain = []
+      return
+    }
+    const gaps = chain.slice(1).map((candidate, index) => candidate.line.offset - chain[index].line.offset)
+    const typicalGap = percentile(gaps, 0.5)
+    if (typicalGap < SOLO_NUMERIC_MIN_GAP) {
+      chain = []
+      return
+    }
+    const blankBeforeCount = chain.filter((candidate) => candidate.line.beforeBlank).length
+    const mostlyBlankSeparated = blankBeforeCount >= Math.ceil(chain.length * 0.5)
+    if (!mostlyBlankSeparated && typicalGap < SOLO_NUMERIC_SPACED_GAP) {
+      chain = []
+      return
+    }
+    for (const candidate of chain) supported.add(candidate.line.offset)
+    chain = []
+  }
+  for (const candidate of solos) {
     const previous = chain.at(-1)
     if (!previous || candidate.number === (previous.number as number) + 1) chain.push(candidate)
     else {
@@ -288,21 +365,28 @@ function repeatedUnnumberedHeadings(lines: LineInfo[], occupiedOffsets: Set<numb
 }
 
 export function detectChapterHeadings(text: string, recognition: ChapterRecognition = 'auto'): DetectedChapter[] {
-  if (recognition === 'off') return []
+  const mode = normalizeChapterRecognition(recognition)
+  if (mode === 'off') return []
+  const allowSoloNumeric = mode === 'numeric'
+  const useStandardHeuristics = mode === 'standard' || mode === 'numeric' || mode === 'auto'
   const lines = makeLines(text)
-  const allCandidates = lines.map(anchorCandidate).filter((candidate): candidate is AnchorCandidate => Boolean(candidate))
+  const allCandidates = lines
+    .map((line) => anchorCandidate(line, allowSoloNumeric))
+    .filter((candidate): candidate is AnchorCandidate => Boolean(candidate))
   const unitlessSupport = supportedUnitlessOffsets(allCandidates)
+  const soloSupport = allowSoloNumeric ? supportedSoloNumericOffsets(allCandidates) : new Set<number>()
   let anchors = allCandidates.filter((candidate) => {
-    if (recognition === 'strict') return candidate.kind === 'explicit' || candidate.kind === 'english'
+    if (mode === 'strict') return candidate.kind === 'explicit' || candidate.kind === 'english'
+    if (candidate.kind === 'solo') return soloSupport.has(candidate.line.offset)
     return candidate.kind !== 'unitless' || unitlessSupport.has(candidate.line.offset)
   })
   anchors = removeDenseFrontRuns(anchors, text.length)
 
   const occupiedOffsets = new Set(anchors.map((candidate) => candidate.line.offset))
-  const subtitles = recognition === 'auto' ? learnSubtitleOffsets(lines, anchors) : new Map<number, LineInfo>()
+  const subtitles = useStandardHeuristics ? learnSubtitleOffsets(lines, anchors) : new Map<number, LineInfo>()
   for (const subtitle of subtitles.values()) occupiedOffsets.add(subtitle.offset)
 
-  if (recognition === 'auto') {
+  if (useStandardHeuristics) {
     const genericLines = repeatedUnnumberedHeadings(lines, occupiedOffsets)
     anchors.push(...genericLines.map((line) => ({ line, kind: 'named' as const, number: null })))
     anchors.sort((left, right) => left.line.offset - right.line.offset)

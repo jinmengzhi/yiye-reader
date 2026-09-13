@@ -6,7 +6,8 @@ export type PageTurnMode = 'scroll' | 'horizontal'
 export type ShelfColumns = 3 | 4 | 5
 export type ShelfSort = 'recent' | 'imported' | 'title' | 'progress' | 'size'
 export type ShelfFilter = 'all' | 'unread' | 'reading' | 'finished'
-export type ChapterRecognition = 'auto' | 'strict' | 'off'
+/** Legacy `auto` is treated as `standard`. Cycle profiles are `standard` and `numeric`. */
+export type ChapterRecognition = 'auto' | 'standard' | 'numeric' | 'strict' | 'off'
 
 export interface CommonFolder {
   id: string

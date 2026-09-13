@@ -37,7 +37,10 @@ import { applyNativeStatusBar, isNativeAndroid, shareNativeBackup, shareNativeTe
 import {
   CHAPTER_RECOGNITION_VERSION,
   buildReaderBlocks,
+  chapterRecognitionLabel,
   detectChapterHeadings,
+  nextChapterRecognitionProfile,
+  normalizeChapterRecognition,
   readerDocumentWithManualChapter,
   type Chapter,
   type ReaderBlock,
@@ -626,7 +629,7 @@ function readerDocumentCacheKey(book: Pick<Book, 'id' | 'content' | 'chapterReco
     .map((addition) => `${addition.offset}:${addition.endOffset ?? ''}:${addition.subtitleOffset ?? ''}:${addition.subtitleEndOffset ?? ''}:${addition.title}`)
     .sort()
     .join('|')
-  return [book.id, book.content.length, book.chapterRecognition ?? 'auto', [...(book.chapterExclusions ?? [])].sort((a, b) => a - b).join(','), additions].join(':')
+  return [book.id, book.content.length, normalizeChapterRecognition(book.chapterRecognition), [...(book.chapterExclusions ?? [])].sort((a, b) => a - b).join(','), additions].join(':')
 }
 
 function rememberReaderDocument(book: Pick<Book, 'id' | 'content' | 'chapterRecognition' | 'chapterExclusions' | 'chapterAdditions'>, document: ReaderDocument): void {
@@ -644,12 +647,12 @@ function getCachedReaderDocument(book: Book): ReaderDocument {
   const key = readerDocumentCacheKey(book)
   const cached = readerDocumentCache.get(key)
   if (cached) return cached
-  const recognition = book.chapterRecognition ?? 'auto'
+  const recognition = normalizeChapterRecognition(book.chapterRecognition)
   const persistent = readerChapterRecognitionCache.get(book.id)
   const validPersistentCache = persistent
     && persistent.fingerprint === book.fingerprint
     && persistent.contentLength === book.content.length
-    && persistent.recognition === recognition
+    && normalizeChapterRecognition(persistent.recognition) === recognition
     && persistent.version === CHAPTER_RECOGNITION_VERSION
   const detected = validPersistentCache ? persistent.chapters : detectChapterHeadings(book.content, recognition)
   if (!validPersistentCache) {
@@ -3536,18 +3539,20 @@ export default function App() {
   async function recognizeTableOfContents() {
     if (!activeBook || tocRecognizing) return
     setTocRecognizing(true)
-    showToast('正在重新识别目录…')
+    const nextProfile = nextChapterRecognitionProfile(activeBook.chapterRecognition)
+    const profileLabel = chapterRecognitionLabel(nextProfile)
+    showToast(`正在切换到「${profileLabel}」…`)
     try {
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.setTimeout(resolve, 0)))
-      const recognition: ChapterRecognition = 'auto'
-      const nextBook = { ...activeBook, chapterRecognition: recognition }
+      const nextBook = { ...activeBook, chapterRecognition: nextProfile }
+      readerDocumentCache.delete(readerDocumentCacheKey(activeBook))
       readerDocumentCache.delete(readerDocumentCacheKey(nextBook))
       readerChapterRecognitionCache.delete(nextBook.id)
       const chapterCount = getCachedReaderDocument(nextBook).chapters.length
       setBooks((current) => current.map((book) => book.id === nextBook.id ? nextBook : book))
       activeBookRef.current = nextBook
       await saveBook(nextBook)
-      showToast(`已重新识别，找到 ${chapterCount} 个章节。`)
+      showToast(`已切换到「${profileLabel}」，找到 ${chapterCount} 个章节。`)
     } catch {
       showToast('目录识别失败，请稍后重试')
     } finally {
