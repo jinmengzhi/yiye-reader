@@ -737,13 +737,16 @@ function readerHeadingBlockHtml(block: ReaderBlock): string {
 }
 
 const READER_PARAGRAPH_GROUP_SIZE = 8_000
-const READER_WINDOW_BEFORE = 100_000
-const READER_WINDOW_AFTER = 300_000
+const READER_WINDOW_BEFORE = 120_000
+const READER_WINDOW_AFTER = 420_000
+const READER_SCROLL_IDLE_MS = 380
+const READER_PROGRESS_UI_MS = 2000
+const READER_PROGRESS_SAVE_MS = 700
 
 function readerBlockWindow(document: ReaderDocument, book: Book, targetOffset: number, direction: -1 | 0 | 1 = 0): ReaderRenderWindow {
   const target = Math.max(0, Math.min(book.content.length, targetOffset))
-  const before = direction > 0 ? 40_000 : direction < 0 ? 300_000 : READER_WINDOW_BEFORE
-  const after = direction > 0 ? 360_000 : direction < 0 ? 100_000 : READER_WINDOW_AFTER
+  const before = direction > 0 ? 60_000 : direction < 0 ? 420_000 : READER_WINDOW_BEFORE
+  const after = direction > 0 ? 480_000 : direction < 0 ? 120_000 : READER_WINDOW_AFTER
   const desiredStart = Math.max(0, target - before)
   const desiredEnd = Math.min(book.content.length, target + after)
   const blocks = document.blocks
@@ -1120,6 +1123,8 @@ export default function App() {
   const progressSaveChain = useRef<Promise<void>>(Promise.resolve())
   const readerGestureRef = useRef<ReaderGesture | null>(null)
   const readerPointerActiveRef = useRef(false)
+  const readerScrollBusyRef = useRef(false)
+  const readerLastScrollTopRef = useRef(0)
   const shelfViewRef = useRef<HTMLElement | null>(null)
   const suppressReaderClick = useRef(false)
   const readerPageTargetRef = useRef<number | null>(null)
@@ -3174,19 +3179,22 @@ export default function App() {
 
   function persistReaderSnapshot(next: Book) {
     activeBookRef.current = next
+    // While reading, avoid frequent React books[] updates — they re-render the
+    // whole app and feel like a mid-scroll hitch. Keep a live ref + delayed UI sync.
     if (readerProgressUiTimerRef.current === null) {
       readerProgressUiTimerRef.current = window.setTimeout(() => {
         readerProgressUiTimerRef.current = null
         const latest = activeBookRef.current
         if (!latest) return
         setBooks((current) => current.map((book) => book.id === latest.id ? latest : book))
-      }, 80)
+      }, readerUiStateRef.current.view === 'reader' ? READER_PROGRESS_UI_MS : 80)
     }
     if (saveTimer.current) window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null
-      void queueReaderProgressSave(next)
-    }, 250)
+      const latest = activeBookRef.current
+      if (latest) void queueReaderProgressSave(latest)
+    }, READER_PROGRESS_SAVE_MS)
   }
 
   function bookAtTextOffset(book: Book, requestedOffset: number): Book {
@@ -3235,19 +3243,26 @@ export default function App() {
   }
   flushReaderProgressRef.current = flushReaderProgress
 
+  function setReaderScrollBusy(busy: boolean) {
+    readerScrollBusyRef.current = busy
+    readerPointerActiveRef.current = busy
+    const element = readerRef.current
+    if (element) element.classList.toggle('reader-pointer-active', busy)
+  }
+
   function shiftReaderWindowIfNeeded(element: HTMLDivElement, book: Book, textOffset: number): void {
     const renderWindow = readerRenderWindowRef.current
     if (!renderWindow || renderWindow.bookId !== book.id || readerRestoreRef.current) return
-    if (readerPointerActiveRef.current) return
+    if (readerScrollBusyRef.current || readerPointerActiveRef.current) return
     const horizontal = settings.pageTurnMode === 'horizontal'
     const scrollable = Math.max(1, horizontal
       ? element.scrollWidth - element.clientWidth
       : element.scrollHeight - element.clientHeight)
     const position = horizontal ? element.scrollLeft : element.scrollTop
     const ratio = position / scrollable
-    const direction: -1 | 0 | 1 = ratio > 0.9 && renderWindow.endOffset < book.content.length
+    const direction: -1 | 0 | 1 = ratio > 0.88 && renderWindow.endOffset < book.content.length
       ? 1
-      : ratio < 0.06 && renderWindow.startOffset > 0
+      : ratio < 0.08 && renderWindow.startOffset > 0
         ? -1
         : 0
     if (!direction) return
@@ -3255,10 +3270,38 @@ export default function App() {
     restoreReaderPosition(element, bookAtTextOffset(book, textOffset))
   }
 
+  function runReaderScrollIdleWork(element: HTMLDivElement) {
+    if (readerRestoreRef.current || readerPointerActiveRef.current) return
+    const latestTop = settings.pageTurnMode === 'horizontal' ? element.scrollLeft : element.scrollTop
+    // Momentum scrolling can still be moving after the last scroll event. Wait
+    // until the position is stable before rewriting the window or toggling CSS.
+    if (Math.abs(latestTop - readerLastScrollTopRef.current) > 1) {
+      readerLastScrollTopRef.current = latestTop
+      scheduleReaderScrollIdle(element)
+      return
+    }
+    setReaderScrollBusy(false)
+    const next = getReaderSnapshot()
+    if (!next) return
+    persistReaderSnapshot(next)
+    shiftReaderWindowIfNeeded(element, next, next.textOffset)
+  }
+
+  function scheduleReaderScrollIdle(element: HTMLDivElement) {
+    if (readerSnapshotTimerRef.current !== null) window.clearTimeout(readerSnapshotTimerRef.current)
+    readerSnapshotTimerRef.current = window.setTimeout(() => {
+      readerSnapshotTimerRef.current = null
+      runReaderScrollIdleWork(element)
+    }, READER_SCROLL_IDLE_MS)
+  }
+
   function handleReaderScroll() {
     const element = readerRef.current
     if (!element) return
-    if (readerScrollFrameRef.current === null) {
+    setReaderScrollBusy(true)
+    readerLastScrollTopRef.current = settings.pageTurnMode === 'horizontal' ? element.scrollLeft : element.scrollTop
+    if (readerScrollFrameRef.current === null
+      && !(settings.pageTurnMode === 'scroll' && settings.progressDisplay === 'percent')) {
       readerScrollFrameRef.current = requestAnimationFrame(() => {
         readerScrollFrameRef.current = null
         const currentElement = readerRef.current
@@ -3273,36 +3316,21 @@ export default function App() {
         readerPageSettleTimerRef.current = null
       }, 180)
     }
-    if (readerSnapshotTimerRef.current !== null) window.clearTimeout(readerSnapshotTimerRef.current)
-    readerSnapshotTimerRef.current = window.setTimeout(() => {
-      readerSnapshotTimerRef.current = null
-      if (readerPointerActiveRef.current) return
-      const next = getReaderSnapshot()
-      if (next) {
-        persistReaderSnapshot(next)
-        shiftReaderWindowIfNeeded(element, next, next.textOffset)
-      }
-    }, 220)
+    scheduleReaderScrollIdle(element)
   }
 
   function setReaderPointerActive(active: boolean) {
-    readerPointerActiveRef.current = active
-    const element = readerRef.current
-    if (element) element.classList.toggle('reader-pointer-active', active)
-    if (!active) {
-      const current = readerRef.current
-      if (!current || readerRestoreRef.current) return
-      if (readerSnapshotTimerRef.current !== null) window.clearTimeout(readerSnapshotTimerRef.current)
-      readerSnapshotTimerRef.current = window.setTimeout(() => {
-        readerSnapshotTimerRef.current = null
-        if (readerPointerActiveRef.current) return
-        const next = getReaderSnapshot()
-        if (next) {
-          persistReaderSnapshot(next)
-          shiftReaderWindowIfNeeded(current, next, next.textOffset)
-        }
-      }, 80)
+    if (active) {
+      setReaderScrollBusy(true)
+      return
     }
+    const current = readerRef.current
+    if (!current || readerRestoreRef.current) {
+      setReaderScrollBusy(false)
+      return
+    }
+    // Keep scroll-busy on through fling; idle timer clears it after motion stops.
+    scheduleReaderScrollIdle(current)
   }
 
   function turnReaderPage(direction: -1 | 1) {

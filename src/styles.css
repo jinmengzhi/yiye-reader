@@ -207,6 +207,7 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(154, 95, 61
 .reader-content { overflow-wrap: anywhere; letter-spacing: .035em; }
 .reader-chunk { display: contents; }
 .reader-scroll.mode-scroll .reader-chunk { display: block; content-visibility: auto; contain-intrinsic-size: auto var(--reader-chunk-height, 1200px); }
+/* Stay visible through touch + fling; cleared only after scroll truly idles. */
 .reader-scroll.mode-scroll.reader-pointer-active .reader-chunk { content-visibility: visible; contain-intrinsic-size: none; }
 .reader-paragraph { margin: 0 0 var(--paragraph-gap); break-inside: auto; orphans: 1; widows: 1; text-align: justify; text-align-last: left; text-indent: 0; text-justify: inter-character; white-space: pre-wrap; }
 .reader-paragraph-group { margin: 0 0 var(--paragraph-gap); text-indent: 0; }

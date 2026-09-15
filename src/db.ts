@@ -42,8 +42,11 @@ export function checkpointBookProgress(book: Pick<Book, 'id' | 'progress' | 'tex
   }
 }
 
+let databasePromise: Promise<IDBDatabase> | null = null
+
 function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (databasePromise) return databasePromise
+  databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = () => {
       const db = request.result
@@ -65,9 +68,21 @@ function openDatabase(): Promise<IDBDatabase> {
         db.createObjectStore(CHAPTER_RECOGNITION_CACHE, { keyPath: 'id' })
       }
     }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const db = request.result
+      db.onclose = () => { databasePromise = null }
+      db.onversionchange = () => {
+        db.close()
+        databasePromise = null
+      }
+      resolve(db)
+    }
+    request.onerror = () => {
+      databasePromise = null
+      reject(request.error)
+    }
   })
+  return databasePromise
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -84,7 +99,6 @@ export async function getBooks(): Promise<Book[]> {
     requestResult(transaction.objectStore(BOOKS).getAll()),
     requestResult<BookProgressRecord[]>(transaction.objectStore(BOOK_PROGRESS).getAll()),
   ])
-  db.close()
   const progressByBook = new Map(progressRecords.map((record) => [record.id, record]))
   return books
     .map((book) => {
@@ -106,7 +120,6 @@ export async function getBooks(): Promise<Book[]> {
 export async function saveBook(book: Book): Promise<void> {
   const db = await openDatabase()
   await requestResult(db.transaction(BOOKS, 'readwrite').objectStore(BOOKS).put(book))
-  db.close()
 }
 
 export async function saveBookProgress(book: Pick<Book, 'id' | 'progress' | 'textOffset' | 'lastReadAt'>): Promise<void> {
@@ -118,22 +131,18 @@ export async function saveBookProgress(book: Pick<Book, 'id' | 'progress' | 'tex
     lastReadAt: book.lastReadAt,
   }
   await requestResult(db.transaction(BOOK_PROGRESS, 'readwrite').objectStore(BOOK_PROGRESS).put(record))
-  db.close()
 }
 
 export async function getChapterRecognitionCaches(): Promise<ChapterRecognitionCacheRecord[]> {
   const db = await openDatabase()
-  const records = await requestResult<ChapterRecognitionCacheRecord[]>(
+  return requestResult<ChapterRecognitionCacheRecord[]>(
     db.transaction(CHAPTER_RECOGNITION_CACHE).objectStore(CHAPTER_RECOGNITION_CACHE).getAll(),
   )
-  db.close()
-  return records
 }
 
 export async function saveChapterRecognitionCache(record: ChapterRecognitionCacheRecord): Promise<void> {
   const db = await openDatabase()
   await requestResult(db.transaction(CHAPTER_RECOGNITION_CACHE, 'readwrite').objectStore(CHAPTER_RECOGNITION_CACHE).put(record))
-  db.close()
 }
 
 export async function deleteBook(id: string): Promise<void> {
@@ -147,7 +156,6 @@ export async function deleteBook(id: string): Promise<void> {
     transaction.onerror = () => reject(transaction.error)
     transaction.onabort = () => reject(transaction.error)
   })
-  db.close()
   try { localStorage.removeItem(`${PROGRESS_CHECKPOINT_PREFIX}${id}`) } catch { /* no-op */ }
 }
 
@@ -156,7 +164,6 @@ export async function findBookByFingerprint(fingerprint: string): Promise<Book |
   const book = await requestResult(
     db.transaction(BOOKS).objectStore(BOOKS).index('fingerprint').get(fingerprint),
   )
-  db.close()
   return book
 }
 
@@ -165,7 +172,6 @@ export async function getSettings(): Promise<ReaderSettings> {
   const saved = await requestResult(
     db.transaction(SETTINGS).objectStore(SETTINGS).get('reader'),
   )
-  db.close()
   return normalizeSettings(saved)
 }
 
@@ -174,26 +180,22 @@ export async function saveSettings(settings: ReaderSettings): Promise<void> {
   await requestResult(
     db.transaction(SETTINGS, 'readwrite').objectStore(SETTINGS).put(settings, 'reader'),
   )
-  db.close()
 }
 
 export async function getCustomFonts(): Promise<CustomFont[]> {
   const db = await openDatabase()
   const fonts = await requestResult(db.transaction(CUSTOM_FONTS).objectStore(CUSTOM_FONTS).getAll())
-  db.close()
   return fonts.sort((a, b) => a.importedAt - b.importedAt)
 }
 
 export async function saveCustomFont(font: CustomFont): Promise<void> {
   const db = await openDatabase()
   await requestResult(db.transaction(CUSTOM_FONTS, 'readwrite').objectStore(CUSTOM_FONTS).put(font))
-  db.close()
 }
 
 export async function deleteCustomFont(id: string): Promise<void> {
   const db = await openDatabase()
   await requestResult(db.transaction(CUSTOM_FONTS, 'readwrite').objectStore(CUSTOM_FONTS).delete(id))
-  db.close()
 }
 
 export async function replaceLibrary(books: Book[], settings: ReaderSettings, customFonts: CustomFont[] = []): Promise<void> {
@@ -217,7 +219,6 @@ export async function replaceLibrary(books: Book[], settings: ReaderSettings, cu
     transaction.onerror = () => reject(transaction.error)
     transaction.onabort = () => reject(transaction.error)
   })
-  db.close()
   try {
     const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
       .filter((key): key is string => Boolean(key?.startsWith(PROGRESS_CHECKPOINT_PREFIX)))
